@@ -1,8 +1,29 @@
+/**
+ * scanner.js — DriveLens 3D (Electron main-process helper)
+ *
+ * Recursively walks a directory tree, accumulating the size of every file.
+ * Returns a tree of node objects:
+ *   { name: string, size: number (bytes), path: string, children: node[] }
+ *
+ * Design decisions
+ * ────────────────
+ * • Symbolic links are skipped to avoid infinite loops and double-counting.
+ * • Errors on individual entries are swallowed so a single inaccessible file
+ *   (e.g. a locked system file) doesn't abort the whole scan.
+ * • Progress is reported only for root-level entries so the UI can show a
+ *   meaningful percentage bar without thousands of tiny updates.
+ * • All directory reads run concurrently (Promise.all) for maximum throughput.
+ *
+ * @param {string}   root        - Absolute path to scan
+ * @param {Function} onProgress  - Called with { pct, done, total } for each
+ *                                  top-level entry that completes
+ * @returns {Promise<object>}    - Root tree node
+ */
 const fs   = require('fs').promises;
 const path = require('path');
 
 async function scanPath(root, onProgress) {
-  // Recursive helper — no progress reporting at sub-levels
+  // ── Recursive inner scanner (no progress events below root level) ─────────
   async function helper(p) {
     let stat;
     try { stat = await fs.stat(p); } catch (e) { return null; }

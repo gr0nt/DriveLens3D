@@ -2,10 +2,11 @@
   "name": "drivelens",
   "productName": "DriveLens",
   "version": "0.1.0",
-  "description": "Windows app: scan drive and show 3D visualisation of disk usage",
+  "description": "Windows 3D disk-usage visualiser — Electron + Three.js",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "install-deps": "npm install"
   },
   "dependencies": {
     "three": "^0.153.0",
@@ -13,5 +14,8 @@
   },
   "devDependencies": {
     "electron": "^26.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }

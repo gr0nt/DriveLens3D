@@ -1,15 +1,47 @@
-/* renderer.js — Disk Pie 3D — enhanced with City, Galaxy, themes, glow, labels */
+/**
+ * renderer.js — DriveLens 3D
+ *
+ * This is the main renderer module.  It is loaded as an ES module from
+ * index.html and runs entirely in the Electron renderer process.
+ *
+ * Responsibilities
+ * ────────────────
+ *  • Initialise the Three.js scene, camera, renderer, post-processing stack,
+ *    and OrbitControls (initThree).
+ *  • Apply and switch between the 7 visual themes (applyTheme).
+ *  • Render six distinct visualisation modes — each is a standalone function:
+ *      renderTreemap   — squarified 3D treemap
+ *      renderSunburst  — concentric ring chart (configurable depth)
+ *      renderBarChart  — horizontal bar chart sorted largest-first
+ *      renderStacked   — stacked bar chart by file-type colour
+ *      renderCity      — 3D city where building height ∝ file size
+ *      renderGalaxy    — solar-system metaphor; drives become stars at root
+ *  • Manage navigation state (navStack) and animated transitions.
+ *  • Handle mouse hover, click, and right-click (context menu).
+ *  • Update sidebar / HUD / right-panel UI to reflect the current selection.
+ *  • Persist user settings to localStorage (settings object).
+ *
+ * IPC bridge (window.api) is exposed by preload.js and used here for:
+ *  scanning drives, file operations (open/rename/delete/copy/cut/properties),
+ *  S.M.A.R.T. data retrieval, and menu event listeners.
+ */
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { OrbitControls }    from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer }   from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass }       from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass }  from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass }       from 'three/addons/postprocessing/OutputPass.js';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// ── Scene-scale constants ─────────────────────────────────────────────────────
+// WORLD  — diameter of the usable world in Three.js units
+// TMAP   — treemap grid size (items are mapped onto a TMAP×TMAP square)
+// BOX_*  — min/max height for treemap boxes, scaled by log(size)
+// GAP    — margin between treemap tiles
 const WORLD = 200, TMAP = 100, BOX_MIN_H = 0.6, BOX_MAX_H = 52, GAP = 0.35;
 
 // ── Easing ────────────────────────────────────────────────────────────────────
+// easeOutBack gives the scale-in animation a satisfying "overshoot and settle"
+// feel when new objects appear after a navigation transition.
 function easeOutBack(t) {
   const c1 = 1.70158, c3 = c1 + 1;
   return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
@@ -17,12 +49,21 @@ function easeOutBack(t) {
 
 
 // ── Sky gradient textures ──────────────────────────────────────────────────────
+// Each entry defines colour stops for a vertical gradient that is rendered as
+// the Three.js scene.background texture.  Colours should be visually distinct
+// between themes — especially Ocean (deep saturated blue) vs Aurora (dark
+// teal-green night sky).
 const THEME_SKY_STOPS = {
+  // Neon City: deep purple-violet night sky
   neon:   [[0,'#0a0018'],[0.38,'#1e0040'],[0.52,'#330060'],[0.65,'#180030'],[1,'#050008']],
-  ember:  [[0,'#050100'],[0.40,'#1a0500'],[0.55,'#2e0a00'],[0.75,'#100200'],[1,'#030000']],
-  nature: [[0,'#000800'],[0.40,'#001a08'],[0.55,'#002210'],[0.75,'#000e04'],[1,'#000300']],
-  ocean:  [[0,'#000810'],[0.40,'#001428'],[0.55,'#001f3a'],[0.75,'#000c1a'],[1,'#000308']],
-  aurora: [[0,'#000308'],[0.40,'#000d15'],[0.55,'#001a12'],[0.75,'#000c0a'],[1,'#000203']],
+  // Ember: smouldering dark orange–brown sky (like a distant wildfire glow)
+  ember:  [[0,'#120200'],[0.35,'#2e0800'],[0.55,'#3d0c00'],[0.75,'#1a0400'],[1,'#050100']],
+  // Nature: deep forest-canopy green, almost no blue
+  nature: [[0,'#011004'],[0.40,'#012808'],[0.55,'#003010'],[0.75,'#011405'],[1,'#010802']],
+  // Ocean: rich deep-sea blue — bright enough to feel like underwater, not outer space
+  ocean:  [[0,'#001c3a'],[0.30,'#003366'],[0.50,'#004880'],[0.70,'#002448'],[1,'#000f20']],
+  // Aurora: dark arctic night sky — clearly distinct greens, no confusion with ocean
+  aurora: [[0,'#000510'],[0.25,'#00150a'],[0.50,'#003020'],[0.72,'#001810'],[1,'#000206']],
 };
 
 function makeSkyTexture(themeName) {
@@ -120,13 +161,14 @@ const THEMES = {
     skyClass: 'nature-sky',
   },
   ocean: {
-    bg: 0x000d14, fog: 0x000d14, ground: 0x001520, grid: [0x002030, 0x001825],
-    ambient: [0x001830, 4.5], sunColor: 0x00ddff, sunIntensity: 2.2,
-    fillColor: 0x0077aa, fillIntensity: 0.6,
-    accent: new THREE.Color(0x00ccff),
-    bloom: { strength: 0.5, radius: 0.5, threshold: 0.65 },
-    ptColor: 0x005577,
-    flashColor: 'rgba(0,200,255,0.45)',
+    // Deep ocean blue — clearly distinct from the aurora (green) theme
+    bg: 0x001020, fog: 0x001830, ground: 0x001530, grid: [0x003060, 0x002040],
+    ambient: [0x002850, 5.0], sunColor: 0x00aaff, sunIntensity: 2.4,
+    fillColor: 0x0055bb, fillIntensity: 0.7,
+    accent: new THREE.Color(0x00aaff),
+    bloom: { strength: 0.6, radius: 0.55, threshold: 0.60 },
+    ptColor: 0x0044aa,
+    flashColor: 'rgba(0,160,255,0.50)',
     skyClass: 'ocean-sky',
   },
   aurora: {
@@ -199,32 +241,50 @@ const helpOverlay    = document.getElementById('help-overlay');
 
 // ── Three.js state ────────────────────────────────────────────────────────────
 let scene, camera, renderer3, controls, raycaster, composer, bloomPass;
+// sceneObjects — every mesh/line/points added this frame (cleared on navigation)
+// clickable    — subset of sceneObjects that respond to hover/click/right-click
+// hovered      — the mesh currently highlighted by mouse-over (null = none)
+// ctxNode      — the file-system node targeted by the last right-click
 let sceneObjects = [], clickable = [], hovered = null, ctxNode = null;
 let clock = new THREE.Clock();
-let galaxyUniforms = null;      // for animated galaxy shader
+// galaxyUniforms — ShaderMaterial uniforms for the galaxy particle shader;
+// updated every frame with the elapsed time so particles twinkle.
+let galaxyUniforms = null;
 
 // ── Transition animation state ────────────────────────────────────────────────
+// tAnim drives the "flash + scale-in" effect played on every navigation.
+// dur   — duration in seconds (scaled by settings.animSpeed)
+// dir   — +1 = drill in (zoom), -1 = navigate up (zoom out)
+// cb    — callback that actually swaps the scene (called at the midpoint)
 const tAnim = { active: false, t: 0, dur: 0.55, executed: false, cb: null, dir: 1 };
 
 // ── Viewport background mode ──────────────────────────────────────────────────
-let viewportBgMode = 'gradient'; // 'solid' | 'sky' | 'gradient'
+// 'solid'    — flat scene.background colour from the active theme
+// 'sky'      — same as gradient (alias kept for UI button labels)
+// 'gradient' — canvas-rendered vertical gradient as scene.background texture
+let viewportBgMode = 'gradient';
 
 // ── App state ─────────────────────────────────────────────────────────────────
 let currentMode  = 'sunburst';
 let currentTheme = 'aurora';
 const currentFont = 'Gotham';   // hardcoded — font selector removed
-let labelThreshold = 2;         // % of parent size
+let labelThreshold = 2;         // items smaller than this % of parent are not labelled
+// navStack — ordered breadcrumb: navStack[0] = root, last = current folder.
+// All navigation pushes/pops this array and calls showLevel().
 const navStack   = [];
 let allDrives    = [];
-let driveRoot         = null;   // top-level scanned root, for "% of drive" calculations
+let driveRoot         = null;   // top-level scanned root (used for "% of drive" maths)
 let driveTotal        = 0;      // total drive capacity in bytes
 let ctxDriveNode      = null;   // node targeted by drive-level right-click
-let currentDriveLabel = '';     // label shown in HUD (e.g. "C:\" or "All Drives")
+let currentDriveLabel = '';     // label shown in the bottom HUD (e.g. "C:\" or "All Drives")
 
 // ── Persistent settings ───────────────────────────────────────────────────────
 let settings = {
   defaultMode: 'sunburst', defaultTheme: 'aurora', defaultBgMode: 'gradient',
   showFreeSpace: true, labelThresholdDefault: 2, animSpeed: 1.0,
+  // recursionDepth applies to Sunburst and Galaxy.
+  // 1 = one ring/level, 2 = two levels, 3 = three levels, 0 = unlimited (All)
+  recursionDepth: 3,
 };
 (function loadSettings() {
   try {
@@ -275,6 +335,8 @@ bindMenuEvents();
 initCollapsibleSidebar();
 
 // ── Three.js setup ────────────────────────────────────────────────────────────
+// Initialises the WebGL renderer, scene, camera, post-processing stack,
+// OrbitControls, raycaster, and all DOM event listeners.  Called once on boot.
 function initThree() {
   scene = new THREE.Scene();
   applyTheme(currentTheme);
@@ -414,21 +476,23 @@ function hideVpOverlay() {
 
 // ── Settings modal ────────────────────────────────────────────────────────────
 (function initSettingsModal() {
-  const sm = document.getElementById('set-default-mode');
-  const st = document.getElementById('set-default-theme');
-  const sf = document.getElementById('set-show-free');
-  const sl = document.getElementById('set-label-thresh');
-  const slp= document.getElementById('set-label-pct');
-  const sa = document.getElementById('set-anim-speed');
-  const sap= document.getElementById('set-anim-pct');
+  const sm  = document.getElementById('set-default-mode');
+  const st  = document.getElementById('set-default-theme');
+  const sf  = document.getElementById('set-show-free');
+  const sl  = document.getElementById('set-label-thresh');
+  const slp = document.getElementById('set-label-pct');
+  const sa  = document.getElementById('set-anim-speed');
+  const sap = document.getElementById('set-anim-pct');
+  const srd = document.getElementById('set-recursion-depth'); // new: recursion count
 
-  // Populate controls from settings
+  // Populate controls from current settings values
   function syncUI() {
     if (sm) sm.value = settings.defaultMode;
     if (st) st.value = settings.defaultTheme;
     if (sf) sf.checked = settings.showFreeSpace !== false;
     if (sl) { sl.value = settings.labelThresholdDefault ?? 2; slp.textContent = sl.value + '%'; }
     if (sa) { sa.value = settings.animSpeed ?? 1; sap.textContent = parseFloat(sa.value).toFixed(1) + '×'; }
+    if (srd) srd.value = String(settings.recursionDepth ?? 3);
   }
   if (sm) sm.addEventListener('change', () => { settings.defaultMode = sm.value; saveSettings(); });
   if (st) st.addEventListener('change', () => { settings.defaultTheme = st.value; saveSettings(); });
@@ -449,6 +513,13 @@ function hideVpOverlay() {
     settings.animSpeed = parseFloat(sa.value);
     sap.textContent = settings.animSpeed.toFixed(1) + '×';
     saveSettings();
+  });
+  // Recursion depth: how many sub-levels Sunburst and Galaxy render.
+  // 0 means unlimited ("All"). Changing re-renders the active view immediately.
+  if (srd) srd.addEventListener('change', () => {
+    settings.recursionDepth = parseInt(srd.value, 10);
+    saveSettings();
+    if (navStack.length) showLevel(navStack[navStack.length - 1]);
   });
 
   const settingsBtn = document.getElementById('settings-btn');
@@ -950,6 +1021,9 @@ function navigateUpWithTransition() {
 }
 
 // ── Level router ──────────────────────────────────────────────────────────────
+// Clears the scene and delegates to the active visualisation renderer.
+// Called after every navigation event (drill in, go up, breadcrumb click,
+// mode switch, theme switch, or settings change).
 function showLevel(node) {
   clearScene();
   updateBreadcrumb();
@@ -975,6 +1049,9 @@ function showLevel(node) {
 }
 
 // ── Canvas text label ─────────────────────────────────────────────────────────
+// Renders white text onto an offscreen Canvas, uploads it as a texture, and
+// attaches it to a billboard PlaneGeometry.  Using Canvas rather than a 3D
+// font keeps the bundle small and guarantees pixel-perfect sharpness.
 function makeLabel(text, font) {
   const canvas = document.createElement('canvas');
   const ctx    = canvas.getContext('2d');
@@ -998,6 +1075,9 @@ function makeLabel(text, font) {
 }
 
 // ── PBR material factory ──────────────────────────────────────────────────────
+// Creates a MeshStandardMaterial with sane defaults.
+// emissiveMult — how much of the base colour bleeds into self-emission (0–1)
+// isFree       — when true the material is semi-transparent (free-space tiles)
 function makeMat(color, emissiveMult = 0.18, rough = 0.35, metal = 0.6, isFree = false) {
   const c = new THREE.Color(color);
   const mat = new THREE.MeshStandardMaterial({
@@ -1015,13 +1095,26 @@ function makeFreeMat() {
   return makeMat(COLOR_FREE, 0.05, 0.9, 0.05, true);
 }
 
+// visibleKids — returns the direct children of a node that should be rendered.
+// Filters out zero-size items and, when the "Show Free Space" setting is off,
+// removes the synthetic "Free Space" placeholder child.
 function visibleKids(node) {
   return (node.children || []).filter(c => c.size > 0 && (settings?.showFreeSpace !== false || c.name !== 'Free Space'));
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 // MODE 1 — 3D TREEMAP (squarified)
+//
+// The squarified treemap algorithm lays out rectangles with near-1:1 aspect
+// ratios to maximise readability.  Each rectangle's area is proportional to
+// the file/folder size.  The resulting 2D rects are then extruded into 3D
+// boxes whose height is a log-scaled function of size.
 // ══════════════════════════════════════════════════════════════════════════════
+
+// squarify — recursive squarified treemap layout.
+// items  — array of { node, a: areaInWorldUnits }
+// rect   — { x, y, w, h } available space in layout coordinates
+// out    — accumulator array that receives placed { node, x, y, w, h } objects
 function squarify(items, rect, out) {
   const { x, y, w, h } = rect;
   if (!items.length || w <= 0 || h <= 0) return;
@@ -1157,66 +1250,82 @@ function addSector(iR, oR, a0, a1, ht, color, node, isF) {
 function renderSunburst(node) {
   posCamera(0, 170, 60, 0, 0, 0);
 
-  // Center disk with glow
+  // ── Centre disk ──────────────────────────────────────────────────────────
+  // Clicking the centre disk navigates UP to the parent directory.
   const cg = new THREE.CylinderGeometry(13, 13, 9, 64);
   const cm = makeMat(THEMES[currentTheme].accent.getHex(), 0.5, 0.2, 0.7);
   const cc = new THREE.Mesh(cg, cm);
   cc.position.y = 4.5; cc.castShadow = true;
-  cc.userData = { node, isFolder: true, baseColor: THEMES[currentTheme].accent.getHex() };
+  // isCenterNav = true tells onClick() to go UP instead of drilling in
+  cc.userData = { node, isFolder: true, baseColor: THEMES[currentTheme].accent.getHex(), isCenterNav: true };
   scene.add(cc); sceneObjects.push(cc); clickable.push(cc);
 
-  // Glow ring around center
+  // Decorative glow ring around the centre
   const ringG = new THREE.TorusGeometry(13.5, 0.6, 16, 64);
-  const ringM = new THREE.MeshStandardMaterial({ color: THEMES[currentTheme].accent, emissive: THEMES[currentTheme].accent, emissiveIntensity: 1.5, roughness: 0.1, metalness: 0.8 });
+  const ringM = new THREE.MeshStandardMaterial({
+    color: THEMES[currentTheme].accent, emissive: THEMES[currentTheme].accent,
+    emissiveIntensity: 1.5, roughness: 0.1, metalness: 0.8,
+  });
   const ring = new THREE.Mesh(ringG, ringM);
   ring.position.y = 9; ring.rotation.x = Math.PI / 2;
   scene.add(ring); sceneObjects.push(ring);
 
+  // ── Ring geometry layout ─────────────────────────────────────────────────
+  // Each ring pair (iR, oR) is one recursion level.  We add more ring pairs
+  // when the user increases the Recursion Count in Settings.
+  // depth: how many levels to draw (0 = unlimited, otherwise cap at that depth)
+  const maxDepth = (settings.recursionDepth > 0) ? settings.recursionDepth : Infinity;
+
+  // Ring geometry: [innerR, outerR, height] for each depth level
+  const RINGS = [
+    [14, 36, 7],
+    [37, 58, 5],
+    [59, 76, 3],
+    [77, 92, 2],
+    [93, 106, 1.5],
+  ];
+
+  // Recursive sector builder — walks the tree up to maxDepth levels deep
+  function buildRings(children, parentAngleStart, parentAngleSpan, depth) {
+    if (depth > maxDepth || depth > RINGS.length) return;
+    const [iR, oR, ht] = RINGS[depth - 1];
+    const tot = children.reduce((s, c) => s + c.size, 0);
+    if (!tot) return;
+    let a = parentAngleStart;
+    for (const ch of children) {
+      const span = (ch.size / tot) * parentAngleSpan;
+      const isF  = !!(ch.children?.length);
+      addSector(iR, oR, a, a + span, ht, nodeColor(ch.name, isF), ch, isF);
+      // Recurse into children for the next ring
+      const subKids = (ch.children || []).filter(c => c.size > 0);
+      if (subKids.length) buildRings(subKids, a, span, depth + 1);
+      a += span;
+    }
+  }
+
   const kids = visibleKids(node);
   if (!kids.length) return;
-  const tot1 = kids.reduce((s, c) => s + c.size, 0);
-  let a1 = 0;
-  for (const ch of kids) {
-    const t1 = (ch.size / tot1) * Math.PI * 2, a2 = a1 + t1;
-    const isF1 = !!(ch.children?.length);
-    addSector(14, 36, a1, a2, 7, nodeColor(ch.name, isF1), ch, isF1);
-
-    const gcs = (ch.children || []).filter(c => c.size > 0);
-    if (gcs.length) {
-      const tot2 = gcs.reduce((s, c) => s + c.size, 0);
-      let a3 = a1;
-      for (const gc of gcs) {
-        const t2 = (gc.size / tot2) * t1, a4 = a3 + t2;
-        const isF2 = !!(gc.children?.length);
-        addSector(37, 58, a3, a4, 5, nodeColor(gc.name, isF2), gc, isF2);
-        const ggcs = (gc.children || []).filter(c => c.size > 0);
-        if (ggcs.length) {
-          const tot3 = ggcs.reduce((s, c) => s + c.size, 0);
-          let a5 = a3;
-          for (const ggc of ggcs) {
-            const t3 = (ggc.size / tot3) * t2, a6 = a5 + t3;
-            if (t3 > 0.008) addSector(59, 76, a5, a6, 3, nodeColor(ggc.name, !!(ggc.children?.length)), ggc, !!(ggc.children?.length));
-            a5 += t3;
-          }
-        }
-        a3 += t2;
-      }
-    }
-    a1 += t1;
-  }
+  // Level 1: direct children, full circle
+  buildRings(kids, 0, Math.PI * 2, 1);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 // MODE 3 — HORIZONTAL BAR CHART
+// Items are sorted largest-first. The camera is positioned to look at the top
+// of the list (index 0 = biggest item) so the most important data is
+// immediately visible without scrolling.
 // ══════════════════════════════════════════════════════════════════════════════
 function renderBarChart(node) {
-  posCamera(0, 22, 220, 0, 0, 0);
+  // Sort descending so the biggest item is always at the top
   const kids = [...visibleKids(node)].sort((a, b) => b.size - a.size);
   if (!kids.length) return;
   const maxSz  = kids[0].size;
   const BAR_H  = 5, SPACING = 8.2, MAX_W = 155;
+  // startY is the Y world-position of the first (largest) bar
   const startY = ((kids.length - 1) / 2) * SPACING;
   const total  = kids.reduce((s,c) => s + c.size, 0);
+  // Aim the camera at the top of the list so the largest items are centred
+  posCamera(0, startY + 10, 220, 0, startY, 0);
 
   const trackMat = new THREE.MeshStandardMaterial({ color: 0x0a0a1e, roughness: 0.9, metalness: 0.1 });
 
@@ -1389,10 +1498,14 @@ const BUILDING_STYLES = {
   folder:      { rough: 0.2,  metal: 0.7,  winColor: 0x4f8cff, aspect: 0.6  },
 };
 
+// addBuilding — constructs one city block with windows, rooftop spire, and a
+// street-level sign so names are visible when walking down the street.
 function addBuilding(cx, cz, bw, bd, bh, color, node, isF) {
-  const cat    = isF ? 'folder' : getCategory(node.name);
-  const style  = BUILDING_STYLES[cat] || BUILDING_STYLES.other;
-  const mat    = new THREE.MeshStandardMaterial({
+  const cat   = isF ? 'folder' : getCategory(node.name);
+  const style = BUILDING_STYLES[cat] || BUILDING_STYLES.other;
+
+  // Main building body
+  const mat  = new THREE.MeshStandardMaterial({
     color,
     emissive: new THREE.Color(color).multiplyScalar(0.08),
     roughness: style.rough, metalness: style.metal,
@@ -1404,7 +1517,7 @@ function addBuilding(cx, cz, bw, bd, bh, color, node, isF) {
   mesh.userData = { node, isFolder: isF, baseColor: color };
   scene.add(mesh); sceneObjects.push(mesh); clickable.push(mesh);
 
-  // Window lights (emissive planes on faces)
+  // ── Window lights ──────────────────────────────────────────────────────────
   if (bh > 3 && bw > 1 && bd > 1) {
     const winMat = new THREE.MeshStandardMaterial({
       color: style.winColor,
@@ -1412,20 +1525,20 @@ function addBuilding(cx, cz, bw, bd, bh, color, node, isF) {
       emissiveIntensity: 1.8,
       roughness: 0.0, metalness: 0.0,
     });
-    const rows = Math.max(1, Math.floor(bh / 3));
-    const cols = Math.max(1, Math.floor(bw / 2));
-    const ww = bw / (cols * 2 + 1) * 0.7;
-    const wh = bh / (rows * 2 + 1) * 0.7;
+    const rows   = Math.max(1, Math.floor(bh / 3));
+    const cols   = Math.max(1, Math.floor(bw / 2));
+    const ww     = bw / (cols * 2 + 1) * 0.7;
+    const wh     = bh / (rows * 2 + 1) * 0.7;
     const winGeo = new THREE.PlaneGeometry(ww, wh);
     for (let r = 0; r < rows; r++) {
       const wy = -bh / 2 + (bh / (rows + 1)) * (r + 1);
       for (let c2 = 0; c2 < cols; c2++) {
         const wx = -bw / 2 + (bw / (cols + 1)) * (c2 + 1);
-        // Front face
+        // Front windows
         const wf = new THREE.Mesh(winGeo, winMat);
         wf.position.set(cx + wx, bh / 2 + wy, cz + bd / 2 + 0.02);
         scene.add(wf); sceneObjects.push(wf);
-        // Back face
+        // Back windows
         const wb = new THREE.Mesh(winGeo, winMat);
         wb.position.set(cx + wx, bh / 2 + wy, cz - bd / 2 - 0.02);
         wb.rotation.y = Math.PI;
@@ -1434,21 +1547,25 @@ function addBuilding(cx, cz, bw, bd, bh, color, node, isF) {
     }
   }
 
-  // Rooftop accent for tall buildings
+  // ── Rooftop spire for tall skyscrapers ────────────────────────────────────
   if (bh > 20) {
-    const spireH = bh * 0.12;
-    const spireMat = new THREE.MeshStandardMaterial({ color: THEMES[currentTheme].accent, emissive: THEMES[currentTheme].accent, emissiveIntensity: 2, roughness: 0.0, metalness: 1.0 });
+    const spireH   = bh * 0.14;
+    const spireMat = new THREE.MeshStandardMaterial({
+      color: THEMES[currentTheme].accent, emissive: THEMES[currentTheme].accent,
+      emissiveIntensity: 2, roughness: 0.0, metalness: 1.0 });
     const spire = new THREE.Mesh(new THREE.ConeGeometry(bw * 0.1, spireH, 8), spireMat);
     spire.position.set(cx, bh + spireH / 2, cz);
     scene.add(spire); sceneObjects.push(spire);
   }
 
-  // Label for large enough footprint
-  if (bw > 5 && bd > 5) {
-    const { mesh: lm } = makeLabel(truncate(node.name, 14), currentFont);
-    lm.position.set(cx, bh + 2.5, cz);
-    scene.add(lm); sceneObjects.push(lm);
-  }
+  // ── Street-level sign ─────────────────────────────────────────────────────
+  // Name label mounted near the base of the building on the front face,
+  // so it's visible at eye-level when walking down the street (WASD).
+  const signH = Math.min(bh * 0.35, 5.5);  // sign sits low — approx first-storey height
+  const { mesh: lm } = makeLabel(truncate(node.name, 16), currentFont);
+  lm.position.set(cx, signH, cz + bd / 2 + 0.3);
+  // Face toward the street (no rotation needed — label is already facing +Z)
+  scene.add(lm); sceneObjects.push(lm);
 
   return mesh;
 }
@@ -1468,65 +1585,102 @@ function addStreetLight(x, z) {
   scene.add(ptLight); sceneObjects.push(ptLight);
 }
 
+// renderCity — turns the current folder into a 3D cityscape.
+//
+// Design intent:
+//   • The default camera is at street level (eye height ~6 units) looking down
+//     the main street so the scene is immediately "walkable".
+//   • Building height AND width/depth scale with file size so tiny files become
+//     suburban houses and huge files become downtown skyscrapers.
+//   • The height formula uses a power-law (not log) for a more dramatic skyline.
+//   • STREET gap between parcels is 14 units — wide enough to walk down.
+//   • Building names appear as street-level signs on the front face (see addBuilding).
+//   • Press WASD / arrow keys to walk around after loading.
 function renderCity(node) {
-  posCamera(0, 80, 200, 0, 10, 0);
+  // Street-level default camera: standing in the main boulevard, looking north
+  posCamera(0, 6, 130, 0, 6, 0);
   controls.maxPolarAngle = Math.PI;
 
-  // City ground
-  const groundMat = new THREE.MeshStandardMaterial({ color: THEMES[currentTheme].ground || 0x060614, roughness: 0.95, metalness: 0.05 });
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), groundMat);
+  // ── Ground plane ──────────────────────────────────────────────────────────
+  const groundColor = THEMES[currentTheme].ground || 0x0a0a14;
+  const groundMat   = new THREE.MeshStandardMaterial({
+    color: groundColor, roughness: 0.96, metalness: 0.04 });
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(500, 500), groundMat);
   ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
   scene.add(ground); sceneObjects.push(ground);
 
-  // Road grid lines
-  const roadMat = new THREE.LineBasicMaterial({ color: 0x1a1a2e });
-  for (let i = -10; i <= 10; i++) {
-    const g1 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-200, 0.05, i * 20), new THREE.Vector3(200, 0.05, i * 20)]);
-    const g2 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(i * 20, 0.05, -200), new THREE.Vector3(i * 20, 0.05, 200)]);
-    const l1 = new THREE.Line(g1, roadMat);
-    const l2 = new THREE.Line(g2, roadMat);
-    scene.add(l1); scene.add(l2); sceneObjects.push(l1); sceneObjects.push(l2);
+  // ── Road surface — wider, slightly lighter than ground ────────────────────
+  const roadSurfaceMat = new THREE.MeshStandardMaterial({
+    color: 0x111118, roughness: 0.98, metalness: 0.02 });
+  // Main avenue down the centre (Z axis)
+  const avenue = new THREE.Mesh(new THREE.PlaneGeometry(18, 500), roadSurfaceMat);
+  avenue.rotation.x = -Math.PI / 2; avenue.position.y = 0.01;
+  scene.add(avenue); sceneObjects.push(avenue);
+
+  // ── Road grid lines (kerb markings) ──────────────────────────────────────
+  const roadMat = new THREE.LineBasicMaterial({ color: 0x1e1e2e });
+  const BLOCK = 28; // one city block width (building + street gap)
+  for (let i = -8; i <= 8; i++) {
+    const v = i * BLOCK;
+    const g1 = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(-250, 0.05, v), new THREE.Vector3(250, 0.05, v)]);
+    const g2 = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(v, 0.05, -250), new THREE.Vector3(v, 0.05, 250)]);
+    [g1, g2].forEach(g => { const l = new THREE.Line(g, roadMat); scene.add(l); sceneObjects.push(l); });
   }
 
-  const kids = (node.children || []).filter(c => c.size > 0);
+  // ── Layout buildings using squarify ───────────────────────────────────────
+  const kids   = (node.children || []).filter(c => c.size > 0);
   if (!kids.length) return;
 
   const total  = kids.reduce((s, c) => s + c.size, 0);
   const sorted = [...kids].sort((a, b) => b.size - a.size);
   const CITY   = 180;
   const rects  = [];
-  squarify(sorted.map(c => ({ node: c, a: (c.size / total) * CITY * CITY })), { x: 0, y: 0, w: CITY, h: CITY }, rects);
+  squarify(sorted.map(c => ({ node: c, a: (c.size / total) * CITY * CITY })),
+    { x: 0, y: 0, w: CITY, h: CITY }, rects);
   const maxSz  = sorted[0].size;
-  const STREET = 4;
+
+  // STREET = gap on each side of a parcel (total road width between buildings)
+  const STREET = 14;
 
   for (const { node: n, x, y, w, h } of rects) {
     if (w < 0.5 || h < 0.5) continue;
-    const cx = (x + w / 2) / CITY * WORLD - WORLD / 2;
-    const cz = (y + h / 2) / CITY * WORLD - WORLD / 2;
+    const cx  = (x + w / 2) / CITY * WORLD - WORLD / 2;
+    const cz  = (y + h / 2) / CITY * WORLD - WORLD / 2;
+    // usable building footprint after street gap
     const dw  = Math.max(w / CITY * WORLD - STREET, 1);
     const dd  = Math.max(h / CITY * WORLD - STREET, 1);
     const isF = !!(n.children?.length);
 
+    // Height uses a power law: exponent < 1 compresses low values (houses)
+    // while large values soar (skyscrapers up to ~90 units tall).
+    const sizeFrac = n.size / maxSz;
+    const blockH   = 1.5 + Math.pow(sizeFrac, 0.38) * 88;
+
     if (isF && n.children.length > 1) {
-      // District: lay out sub-buildings
-      const subKids = n.children.filter(c => c.size > 0).sort((a, b) => b.size - a.size);
+      // ── Folder district: sub-buildings laid out inside this parcel ─────
+      const subKids  = n.children.filter(c => c.size > 0).sort((a, b) => b.size - a.size);
       const subTotal = subKids.reduce((s, c) => s + c.size, 0);
       const subRects = [];
-      squarify(subKids.map(c => ({ node: c, a: (c.size / subTotal) * dw * dd })), { x: 0, y: 0, w: dw, h: dd }, subRects);
+      squarify(subKids.map(c => ({ node: c, a: (c.size / subTotal) * dw * dd })),
+        { x: 0, y: 0, w: dw, h: dd }, subRects);
       const subMaxSz = subKids[0]?.size || 1;
 
       for (const { node: sn, x: sx, y: sy, w: sw, h: sh } of subRects) {
         if (sw < 0.3 || sh < 0.3) continue;
-        const scx = cx - dw / 2 + sx + sw / 2;
-        const scz = cz - dd / 2 + sy + sh / 2;
-        const sbw = Math.max(sw - 1.5, 0.5);
-        const sbd = Math.max(sh - 1.5, 0.5);
-        const sbh = 1.2 + (Math.log(sn.size + 2) / Math.log(subMaxSz + 2)) * 45;
-        addBuilding(scx, scz, sbw, sbd, sbh, nodeColor(sn.name, !!(sn.children?.length)), sn, !!(sn.children?.length));
+        const scx  = cx - dw / 2 + sx + sw / 2;
+        const scz  = cz - dd / 2 + sy + sh / 2;
+        const sbw  = Math.max(sw - 2, 0.5);
+        const sbd  = Math.max(sh - 2, 0.5);
+        const sbh  = 1.5 + Math.pow(sn.size / subMaxSz, 0.38) * 72;
+        addBuilding(scx, scz, sbw, sbd, sbh,
+          nodeColor(sn.name, !!(sn.children?.length)), sn, !!(sn.children?.length));
       }
 
-      // District boundary marker
-      const borderMat = new THREE.LineBasicMaterial({ color: THEMES[currentTheme].accent, transparent: true, opacity: 0.3 });
+      // District boundary marker (faint accent outline at street level)
+      const borderMat = new THREE.LineBasicMaterial({
+        color: THEMES[currentTheme].accent, transparent: true, opacity: 0.25 });
       const pts = [
         new THREE.Vector3(cx - dw/2, 0.1, cz - dd/2),
         new THREE.Vector3(cx + dw/2, 0.1, cz - dd/2),
@@ -1538,25 +1692,16 @@ function renderCity(node) {
       scene.add(border); sceneObjects.push(border);
 
     } else {
-      // Single building
-      const bh = 1.2 + (Math.log(n.size + 2) / Math.log(maxSz + 2)) * 55;
-      addBuilding(cx, cz, Math.max(dw, 1), Math.max(dd, 1), bh, nodeColor(n.name, isF), n, isF);
-    }
-
-    // District label
-    const pct = (n.size / total) * 100;
-    if (pct >= labelThreshold && dw > 8 && dd > 8) {
-      const { mesh: lm } = makeLabel(truncate(n.name, 16), currentFont);
-      const topH = isF ? 52 : (1.2 + (Math.log(n.size + 2) / Math.log(maxSz + 2)) * 55);
-      lm.position.set(cx, topH + 3, cz);
-      scene.add(lm); sceneObjects.push(lm);
+      // ── Single file / leaf node ──────────────────────────────────────────
+      addBuilding(cx, cz, Math.max(dw, 1), Math.max(dd, 1), blockH,
+        nodeColor(n.name, isF), n, isF);
     }
   }
 
-  // Scatter street lights
+  // ── Street lights scattered along the main boulevard ─────────────────────
   for (let i = -4; i <= 4; i += 2) {
     for (let j = -4; j <= 4; j += 2) {
-      if (Math.random() > 0.5) addStreetLight(i * 22 + 11, j * 22 + 11);
+      if (Math.random() > 0.45) addStreetLight(i * BLOCK + 11, j * BLOCK + 11);
     }
   }
 }
@@ -1632,117 +1777,258 @@ function addParticleCloud(cx, cz, cloudR, files, parentMaxSz) {
   scene.add(pts); sceneObjects.push(pts);
 }
 
+// ── Helper: draw one star/sun sphere at (cx, 0, cz) ─────────────────────────
+function addGalaxySun(cx, cz, sunR, color, emissiveIntensity, node, isCenter) {
+  const c   = new THREE.Color(color);
+  const mat = new THREE.MeshStandardMaterial({
+    color: c, emissive: c, emissiveIntensity,
+    roughness: 0.05, metalness: 0.8,
+  });
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(sunR, 40, 40), mat);
+  mesh.position.set(cx, 0, cz);
+  // isCenterNav navigates up; only set for the single root centre sun
+  mesh.userData = { node, isFolder: true, baseColor: color,
+    isCenterNav: isCenter };
+  scene.add(mesh); sceneObjects.push(mesh); clickable.push(mesh);
+
+  // Outer corona
+  const cm = new THREE.MeshBasicMaterial({
+    color: c, transparent: true, opacity: 0.12, side: THREE.BackSide });
+  const corona = new THREE.Mesh(new THREE.SphereGeometry(sunR * 1.6, 32, 32), cm);
+  corona.position.set(cx, 0, cz);
+  scene.add(corona); sceneObjects.push(corona);
+
+  return mesh;
+}
+
+// ── Helper: draw one planet sphere at (px, 0, pz) with optional ring ─────────
+function addGalaxyPlanet(px, pz, planetR, color, node) {
+  const pColor = new THREE.Color(color);
+  const pMat   = new THREE.MeshStandardMaterial({
+    color: pColor, emissive: pColor.clone().multiplyScalar(0.35),
+    roughness: 0.35, metalness: 0.65,
+  });
+  const planet = new THREE.Mesh(new THREE.SphereGeometry(planetR, 24, 24), pMat);
+  planet.position.set(px, 0, pz);
+  planet.userData = { node, isFolder: true, baseColor: color };
+  scene.add(planet); sceneObjects.push(planet); clickable.push(planet);
+
+  // Atmospheric ring on large planets
+  if (planetR > 6) {
+    const rGeo = new THREE.TorusGeometry(planetR * 1.35, planetR * 0.08, 8, 48);
+    const rMat = new THREE.MeshBasicMaterial({ color: pColor, transparent: true, opacity: 0.25 });
+    const ring = new THREE.Mesh(rGeo, rMat);
+    ring.position.set(px, 0, pz);
+    ring.rotation.x = Math.PI / 2.8;
+    scene.add(ring); sceneObjects.push(ring);
+  }
+
+  // Label above planet
+  const { mesh: lm } = makeLabel(truncate(node.name, 14), currentFont);
+  lm.position.set(px, planetR + 3, pz);
+  scene.add(lm); sceneObjects.push(lm);
+
+  return planet;
+}
+
+// ── Helper: draw a circular orbit path at the given radius ───────────────────
+function addOrbitRing(cx, cz, orbitR) {
+  const pts = [];
+  for (let a = 0; a <= Math.PI * 2 + 0.01; a += 0.05)
+    pts.push(new THREE.Vector3(cx + Math.cos(a) * orbitR, 0, cz + Math.sin(a) * orbitR));
+  const line = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicMaterial({ color: 0x1a1a40, transparent: true, opacity: 0.4 }));
+  scene.add(line); sceneObjects.push(line);
+}
+
+// ── Main galaxy renderer ──────────────────────────────────────────────────────
+// Concept (when at root / All Drives level):
+//   • The local machine is the invisible centre of the galaxy
+//   • Each drive is a Star / Sun — size ∝ total capacity, colour ∝ free space
+//   • First sub-folder level = Planets
+//   • Second sub-folder level = Moons
+//   (standard drill-in: Star → Planets → Moons → deeper files)
+//
+// At any other level the centre sphere represents the current folder and
+// clicking it navigates back up to the parent.
 function renderGalaxy(node) {
   posCamera(0, 110, 260, 0, 0, 0);
   controls.maxPolarAngle = Math.PI;
 
-  // Background star field
+  // ── Background star field ─────────────────────────────────────────────────
   const bgCount = 5000;
   const bgPos   = new Float32Array(bgCount * 3);
   for (let i = 0; i < bgCount * 3; i++) bgPos[i] = (Math.random() - 0.5) * 1000;
   const bgGeo = new THREE.BufferGeometry();
   bgGeo.setAttribute('position', new THREE.BufferAttribute(bgPos, 3));
-  const bgMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.28, sizeAttenuation: true, transparent: true, opacity: 0.35 });
+  const bgMat = new THREE.PointsMaterial({
+    color: 0xffffff, size: 0.28, sizeAttenuation: true, transparent: true, opacity: 0.35 });
   const bgStars = new THREE.Points(bgGeo, bgMat);
   scene.add(bgStars); sceneObjects.push(bgStars);
 
-  // Sort children: folders first by size (they become planets), files last
-  const folders = visibleKids(node).filter(c => c.children?.length).sort((a, b) => b.size - a.size);
+  // Determine the recursion limit (0 = unlimited)
+  const maxDepth = (settings.recursionDepth > 0) ? settings.recursionDepth : Infinity;
+
+  // ── All-Drives special case: drives become Stars ──────────────────────────
+  // When the user is at the very root of the "All Drives" view, each drive
+  // node is a distinct Star scattered around the galactic centre.
+  const isAllDrivesRoot = (node.name === 'All Drives');
+
+  if (isAllDrivesRoot) {
+    // Place drive-stars in a wide ring around the true centre
+    const driveNodes = visibleKids(node);
+    if (!driveNodes.length) return;
+    const maxDriveSize = Math.max(...driveNodes.map(d => d.size));
+    const STAR_ORBIT   = 120; // radius of the ring that stars sit on
+
+    driveNodes.forEach((drive, idx) => {
+      const angle  = (idx / driveNodes.length) * Math.PI * 2;
+      const sx     = Math.cos(angle) * STAR_ORBIT;
+      const sz     = Math.sin(angle) * STAR_ORBIT;
+
+      // Star size proportional to total drive capacity (cube-root for visual balance)
+      const sizeRatio = drive.size / maxDriveSize;
+      const starR     = 6 + Math.cbrt(sizeRatio) * 14;
+
+      // Colour from green (lots of free space) → red (nearly full)
+      const usedFrac  = drive._driveUsed != null
+        ? drive._driveUsed / Math.max(drive.size, 1)
+        : 0.5;
+      const starColor = new THREE.Color().setHSL(0.33 * (1 - usedFrac), 0.9, 0.55);
+
+      addGalaxySun(sx, sz, starR, starColor.getHex(), 2.5, drive, false);
+
+      // Label the star with the drive letter
+      const { mesh: lm } = makeLabel(drive.name, currentFont);
+      lm.position.set(sx, starR + 4, sz);
+      scene.add(lm); sceneObjects.push(lm);
+
+      // Planets: sub-folders of this drive (only if depth allows)
+      if (maxDepth >= 2) {
+        const driveFolders = visibleKids(drive)
+          .filter(c => c.children?.length).sort((a, b) => b.size - a.size);
+        const maxPlanetSz  = driveFolders[0]?.size || 1;
+        driveFolders.forEach((folder, pidx) => {
+          const pr    = 1.5 + Math.cbrt(folder.size / maxPlanetSz) * 5;
+          const por   = starR + 14 + pidx * 12;
+          const pa    = angle + (pidx / Math.max(driveFolders.length, 1)) * Math.PI * 2;
+          const ppx   = sx + Math.cos(pa) * por;
+          const ppz   = sz + Math.sin(pa) * por;
+          addOrbitRing(sx, sz, por);
+          addGalaxyPlanet(ppx, ppz, pr, nodeColor(folder.name, true), folder);
+
+          // Moons (depth 3)
+          if (maxDepth >= 3) {
+            const subFolders = visibleKids(folder)
+              .filter(c => c.children?.length).sort((a, b) => b.size - a.size).slice(0, 6);
+            subFolders.forEach((moon, midx) => {
+              const mr  = 0.8 + Math.cbrt(moon.size / Math.max(folder.size, 1)) * 2;
+              const mor = pr + 5 + midx * 5;
+              const ma  = pa + (midx / Math.max(subFolders.length, 1)) * Math.PI * 2;
+              const mpx = ppx + Math.cos(ma) * mor;
+              const mpz = ppz + Math.sin(ma) * mor;
+              addOrbitRing(ppx, ppz, mor);
+              addGalaxyPlanet(mpx, mpz, mr, nodeColor(moon.name, true), moon);
+            });
+          }
+
+          // File particles around each planet
+          const childFiles = visibleKids(folder).filter(c => !c.children?.length);
+          if (childFiles.length)
+            addParticleCloud(ppx, ppz, pr + 5, childFiles, childFiles[0].size);
+        });
+      }
+
+      // Loose files in this drive as a small asteroid belt around the star
+      const driveFiles = visibleKids(drive).filter(c => !c.children?.length);
+      if (driveFiles.length)
+        addParticleCloud(sx, sz, starR + 7, driveFiles, driveFiles[0].size);
+    });
+
+    // Boost bloom for the galaxy
+    if (bloomPass) {
+      bloomPass.strength  = Math.max(THEMES[currentTheme].bloom.strength, 1.2);
+      bloomPass.threshold = 0.15;
+    }
+    return;
+  }
+
+  // ── Normal galaxy: single centre sun + orbiting planets/moons ────────────
+  const folders  = visibleKids(node).filter(c => c.children?.length).sort((a, b) => b.size - a.size);
   const dirFiles = visibleKids(node).filter(c => !c.children?.length).sort((a, b) => b.size - a.size);
   const allChildren = [...folders, ...dirFiles];
   if (!allChildren.length) return;
 
   const maxChildSz = allChildren[0].size;
 
-  // ── Central Sun ──────────────────────────────────────────────────────────────
-  // Radius = 14–22 based on how dominant the largest child is (or just fixed)
-  const sunR = 16;
+  // Central sun represents the current folder; clicking it goes UP
+  const sunR   = 16;
   const accent = THEMES[currentTheme].accent;
-  const sunMat = new THREE.MeshStandardMaterial({
-    color: accent, emissive: accent, emissiveIntensity: 3.0,
-    roughness: 0.05, metalness: 0.8,
-  });
-  const sun = new THREE.Mesh(new THREE.SphereGeometry(sunR, 40, 40), sunMat);
-  sun.userData = { node, isFolder: true, baseColor: accent.getHex() };
-  scene.add(sun); sceneObjects.push(sun); clickable.push(sun);
+  addGalaxySun(0, 0, sunR, accent.getHex(), 3.0, node, true);
 
-  // Outer corona glow
-  const coronaMat = new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.12, side: THREE.BackSide });
-  const corona = new THREE.Mesh(new THREE.SphereGeometry(sunR * 1.6, 32, 32), coronaMat);
-  scene.add(corona); sceneObjects.push(corona);
+  const { mesh: sunLabel } = makeLabel(truncate(node.name, 16), currentFont);
+  sunLabel.position.set(0, sunR + 3, 0);
+  scene.add(sunLabel); sceneObjects.push(sunLabel);
 
-  const sunLabel = makeLabel(truncate(node.name, 16), currentFont);
-  sunLabel.mesh.position.set(0, sunR + 3, 0);
-  scene.add(sunLabel.mesh); sceneObjects.push(sunLabel.mesh);
-
-  // ── Planets (folders) ─────────────────────────────────────────────────────
-  // Orbit radii: evenly spaced starting just beyond the sun; largest planet nearest
+  // ── Planets (sub-folders) ─────────────────────────────────────────────────
   const ORBIT_START = sunR + 22;
   const ORBIT_STEP  = 20;
 
   folders.forEach((folder, idx) => {
     const sizeRatio = folder.size / maxChildSz;
-    // Cube-root for volume-based radius: large = up to 12, small = at least 2.5
+    // Cube-root gives volume-based perceived size
     const planetR = 2.5 + Math.cbrt(sizeRatio) * 11;
     const orbitR  = ORBIT_START + idx * ORBIT_STEP;
     const angle   = (idx / Math.max(folders.length, 1)) * Math.PI * 2 + 0.3;
     const px = Math.cos(angle) * orbitR;
     const pz = Math.sin(angle) * orbitR;
 
-    // Orbit ring
-    const pts = [];
-    for (let a = 0; a <= Math.PI * 2 + 0.01; a += 0.05)
-      pts.push(new THREE.Vector3(Math.cos(a) * orbitR, 0, Math.sin(a) * orbitR));
-    const orbitGeo = new THREE.BufferGeometry().setFromPoints(pts);
-    const orbitLine = new THREE.Line(orbitGeo,
-      new THREE.LineBasicMaterial({ color: 0x1a1a40, transparent: true, opacity: 0.4 }));
-    scene.add(orbitLine); sceneObjects.push(orbitLine);
+    addOrbitRing(0, 0, orbitR);
+    addGalaxyPlanet(px, pz, planetR, nodeColor(folder.name, true), folder);
 
-    // Planet sphere
-    const pColor = nodeColor(folder.name, true);
-    const pMat = new THREE.MeshStandardMaterial({
-      color: pColor, emissive: new THREE.Color(pColor).multiplyScalar(0.35),
-      roughness: 0.35, metalness: 0.65,
-    });
-    const planet = new THREE.Mesh(new THREE.SphereGeometry(planetR, 24, 24), pMat);
-    planet.position.set(px, 0, pz);
-    planet.userData = { node: folder, isFolder: true, baseColor: pColor };
-    scene.add(planet); sceneObjects.push(planet); clickable.push(planet);
+    // ── Moons (sub-sub-folders, depth 2+) ──────────────────────────────────
+    if (maxDepth >= 2) {
+      const moonFolders = visibleKids(folder)
+        .filter(c => c.children?.length).sort((a, b) => b.size - a.size).slice(0, 6);
+      const maxMoonSz   = moonFolders[0]?.size || 1;
+      moonFolders.forEach((moon, midx) => {
+        const moonR  = 1 + Math.cbrt(moon.size / maxMoonSz) * 3.5;
+        const moonOr = planetR + 6 + midx * 6;
+        const moonA  = angle + (midx / Math.max(moonFolders.length, 1)) * Math.PI * 2;
+        const mpx    = px + Math.cos(moonA) * moonOr;
+        const mpz    = pz + Math.sin(moonA) * moonOr;
+        addOrbitRing(px, pz, moonOr);
+        addGalaxyPlanet(mpx, mpz, moonR, nodeColor(moon.name, true), moon);
 
-    // Atmospheric ring on larger planets
-    if (planetR > 6) {
-      const rGeo = new THREE.TorusGeometry(planetR * 1.35, planetR * 0.08, 8, 48);
-      const rMat = new THREE.MeshBasicMaterial({ color: pColor, transparent: true, opacity: 0.25 });
-      const ring = new THREE.Mesh(rGeo, rMat);
-      ring.position.set(px, 0, pz);
-      ring.rotation.x = Math.PI / 2.8;
-      scene.add(ring); sceneObjects.push(ring);
+        // Depth-3 moons of moons
+        if (maxDepth >= 3) {
+          const subMoons = visibleKids(moon)
+            .filter(c => c.children?.length).sort((a, b) => b.size - a.size).slice(0, 4);
+          subMoons.forEach((sm, smidx) => {
+            const smR  = 0.6 + Math.cbrt(sm.size / Math.max(moon.size, 1)) * 2;
+            const smOr = moonR + 4 + smidx * 4;
+            const smA  = moonA + (smidx / Math.max(subMoons.length, 1)) * Math.PI * 2;
+            addOrbitRing(mpx, mpz, smOr);
+            addGalaxyPlanet(
+              mpx + Math.cos(smA) * smOr, mpz + Math.sin(smA) * smOr,
+              smR, nodeColor(sm.name, true), sm);
+          });
+        }
+      });
     }
 
-    // Label
-    const pct = (folder.size / node.size) * 100;
-    if (pct >= labelThreshold) {
-      const { mesh: lm } = makeLabel(truncate(folder.name, 14), currentFont);
-      lm.position.set(px, planetR + 3, pz);
-      scene.add(lm); sceneObjects.push(lm);
-    }
-
-    // File particles orbiting this planet (asteroid belt / moons)
-    const childFiles = (folder.children || []).filter(c => !c.children?.length && c.size > 0)
-                                              .sort((a, b) => b.size - a.size);
-    if (childFiles.length) {
-      const maxFileSz = childFiles[0].size;
-      addParticleCloud(px, pz, planetR + 7, childFiles, maxFileSz);
-    }
+    // File particles as an asteroid belt around each planet
+    const childFiles = visibleKids(folder).filter(c => !c.children?.length);
+    if (childFiles.length)
+      addParticleCloud(px, pz, planetR + 7, childFiles, childFiles[0].size);
   });
 
-  // ── Direct files (asteroid belt around sun) ───────────────────────────────
-  if (dirFiles.length) {
-    const maxFileSz = dirFiles[0].size;
-    addParticleCloud(0, 0, sunR + 10, dirFiles, maxFileSz);
-  }
+  // Loose files at this level form an asteroid belt around the central sun
+  if (dirFiles.length)
+    addParticleCloud(0, 0, sunR + 10, dirFiles, dirFiles[0].size);
 
-  // Boost bloom for galaxy
+  // Boost bloom for the galaxy scene
   if (bloomPass) {
     bloomPass.strength  = Math.max(THEMES[currentTheme].bloom.strength, 1.2);
     bloomPass.threshold = 0.15;
@@ -1910,7 +2196,15 @@ function onClick(e) {
   raycaster.setFromCamera(ndc(e), camera);
   const hits = raycaster.intersectObjects(clickable, false);
   if (!hits.length) return;
-  const { node: n, isFolder } = hits[0].object.userData;
+  const { node: n, isFolder, isCenterNav } = hits[0].object.userData;
+
+  // Clicking the centre core (sunburst disc or galaxy sun) goes up one level —
+  // the same as pressing Escape or the Back button.
+  if (isCenterNav) {
+    if (navStack.length > 1) navigateUpWithTransition();
+    return;
+  }
+
   updateInfoPanel(n, isFolder);
   updateRightPanel(n, isFolder);
   if (isFolder && n.children?.length && n.name !== 'Free Space' && n.name !== 'Used') {
@@ -2006,13 +2300,6 @@ document.getElementById('ctx-open').addEventListener('click', async (e) => {
   const result = await window.api.fsOpen(ctxNode.path);
   hideCtxMenu();
   if (result?.error) alert('Open failed: ' + result.error);
-});
-
-document.getElementById('ctx-open-with').addEventListener('click', async (e) => {
-  e.stopPropagation();
-  if (!ctxNode) return;
-  await window.api.fsOpenWith(ctxNode.path);
-  hideCtxMenu();
 });
 
 document.getElementById('ctx-rename').addEventListener('click', async (e) => {

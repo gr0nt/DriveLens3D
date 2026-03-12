@@ -1,9 +1,31 @@
+/**
+ * main.js — DriveLens 3D  (Electron main process)
+ *
+ * This file runs in Node.js (not the browser).  It is responsible for:
+ *
+ *  • Creating and managing the BrowserWindow (createWindow).
+ *  • Building the native application menu (buildMenu).
+ *  • Handling all IPC calls from the renderer process via ipcMain.handle().
+ *
+ * IPC handlers (invoked by renderer/renderer.js via window.api.*):
+ *  scan-drive        — recursively scan a drive/path and return a size tree
+ *  list-drives       — enumerate all local + network drives via PowerShell
+ *  open-in-explorer  — reveal a path in Windows Explorer
+ *  fs-rename         — rename a file or folder
+ *  fs-delete         — move a file to the Recycle Bin (shell.trashItem)
+ *  fs-copy / fs-cut  — write a file path to the clipboard as CF_HDROP
+ *  fs-properties     — show the native Windows Properties dialog
+ *  fs-stat           — return created/modified/accessed dates for a path
+ *  fs-open           — open a file with its default application
+ *  fs-smart          — query S.M.A.R.T. data via PowerShell + WMI
+ *  list-fonts        — enumerate installed system fonts
+ */
 const { app, BrowserWindow, ipcMain, Menu, shell, clipboard } = require('electron');
 const path = require('path');
 const os   = require('os');
 const fs   = require('fs');
 const checkDiskSpace = require('check-disk-space');
-const { exec } = require('child_process');
+const { exec }    = require('child_process');
 const { scanPath } = require('./scanner');
 
 let mainWindow = null;
@@ -228,10 +250,28 @@ ipcMain.handle('fs-cut', async (_event, filePath) => {
 });
 
 ipcMain.handle('fs-properties', async (_event, filePath) => {
+  // Invoke the native Windows "Properties" dialog using the Shell.Application COM
+  // object.  We write the script to a temp .ps1 file to avoid shell-quoting
+  // nightmares with paths that contain spaces, apostrophes, or brackets.
+  // Start-Sleep keeps the PowerShell host alive long enough for the dialog to
+  // remain open after InvokeVerb() returns.
   try {
-    const escaped = filePath.replace(/'/g, "''");
-    const ps = `$sh = New-Object -ComObject Shell.Application; $folder = $sh.Namespace([System.IO.Path]::GetDirectoryName('${escaped}')); $item = $folder.ParseName([System.IO.Path]::GetFileName('${escaped}')); $item.InvokeVerb('Properties')`;
-    exec(`powershell -NoProfile -Command "${ps}"`, { windowsHide: false });
+    const dir  = path.dirname(filePath).replace(/'/g, "''");
+    const name = path.basename(filePath).replace(/'/g, "''");
+    const script = [
+      `$sh     = New-Object -ComObject Shell.Application`,
+      `$folder = $sh.Namespace('${dir}')`,
+      `if ($folder) {`,
+      `  $item = $folder.ParseName('${name}')`,
+      `  if ($item) { $item.InvokeVerb('Properties') }`,
+      `}`,
+      `# Keep the host alive so the modeless Properties dialog stays open`,
+      `Start-Sleep -Seconds 120`,
+    ].join('\n');
+    const tmp = path.join(os.tmpdir(), 'dl_props.ps1');
+    await fs.promises.writeFile(tmp, script, 'utf8');
+    exec(`powershell -NoProfile -ExecutionPolicy Bypass -File "${tmp}"`,
+      { windowsHide: false });
     return { ok: true };
   } catch (e) { return { error: e.message }; }
 });
