@@ -1,0 +1,33 @@
+{
+  "name": "drivelens3d",
+  "productName": "DriveLens3D",
+  "author": "Grant Runyon",
+  "version": "0.1.0",
+  "description": "Windows 3D disk-usage visualiser — Electron + Three.js",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "start:vm": "electron . --vm-safe",
+    "install-deps": "npm install",
+    "dist": "electron-builder"
+  },
+  "dependencies": {
+    "check-disk-space": "^2.1.0",
+    "three": "^0.153.0"
+  },
+  "devDependencies": {
+    "electron": "^26.0.0",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "com.drivelens3d.app",
+    "productName": "DriveLens3D",
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.png"
+    }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

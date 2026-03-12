@@ -1,0 +1,858 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>DriveLens</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body,html{width:100%;height:100%;overflow:hidden;font-family:'Segoe UI',sans-serif;background:#020210;color:#e0e0e0}
+    #layout{display:flex;width:100%;height:100%}
+
+    /* ── Left Sidebar ── */
+    #sidebar{
+      width:240px;min-width:240px;
+      background:linear-gradient(180deg,rgba(8,8,20,.98) 0%,rgba(5,5,15,.98) 100%);
+      border-right:1px solid rgba(255,255,255,.07);
+      display:flex;flex-direction:column;padding:10px;gap:8px;
+      overflow-y:auto;z-index:10;flex-shrink:0;
+      box-shadow:4px 0 20px rgba(0,0,0,.6)
+    }
+
+    /* ── Canvas + Right Panel wrapper ── */
+    #center-wrap{flex:1;display:flex;min-width:0;position:relative}
+    #canvas-container{flex:1;position:relative;overflow:hidden}
+
+    /* ── Right Info Panel ── */
+    #right-panel{
+      width:220px;min-width:220px;
+      background:linear-gradient(180deg,rgba(6,6,18,.98) 0%,rgba(4,4,12,.98) 100%);
+      border-left:1px solid rgba(255,255,255,.07);
+      display:flex;flex-direction:column;padding:10px;gap:8px;
+      overflow-y:auto;z-index:10;flex-shrink:0;
+      box-shadow:-4px 0 20px rgba(0,0,0,.6)
+    }
+    #right-panel .label{font-size:9px;color:#444;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:3px}
+    #rp-name{font-size:12px;font-weight:700;color:#fff;word-break:break-all;line-height:1.4;margin-bottom:2px}
+    #rp-size{font-size:18px;font-weight:700;color:#4f8cff;letter-spacing:-.3px}
+    #rp-sub{font-size:10px;color:#666;line-height:1.8;margin-top:4px}
+    #rp-bar-track{background:rgba(255,255,255,.04);border-radius:3px;height:5px;overflow:hidden;margin-top:4px}
+    #rp-bar-fill{height:100%;background:linear-gradient(90deg,#4f8cff,#a78bfa);width:0%;transition:width .5s}
+    #rp-type-grid{display:grid;grid-template-columns:1fr 1fr;gap:3px;margin-top:4px}
+    .rp-type-row{display:flex;align-items:center;gap:5px;font-size:9px;color:#666}
+    .rp-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+    .rp-type-sz{margin-left:auto;font-size:9px;color:#444}
+    #rp-placeholder{font-size:10px;color:#2a2a3a;line-height:1.9;margin-top:8px}
+
+    h1{font-size:13px;font-weight:700;color:#fff;letter-spacing:.8px;
+       text-shadow:0 0 12px rgba(79,140,255,.6)}
+
+    .label{font-size:9px;color:#444;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:3px}
+
+    select,input[type=text]{
+      width:100%;padding:6px 8px;
+      background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);
+      border-radius:5px;color:#d0d0d0;font-size:11px;outline:none;
+      transition:border-color .2s,box-shadow .2s
+    }
+    select{cursor:pointer;appearance:none;
+      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23555'/%3E%3C/svg%3E");
+      background-repeat:no-repeat;background-position:right 8px center;padding-right:24px}
+    select:focus,input[type=text]:focus{border-color:rgba(79,140,255,.5);box-shadow:0 0 8px rgba(79,140,255,.2)}
+    select option{background:#0d0d22;color:#e0e0e0}
+    input[type=range]{width:100%;padding:4px 0;cursor:pointer;accent-color:#4f8cff}
+
+    #scan-btn{
+      width:100%;padding:8px;
+      background:linear-gradient(135deg,#2a5ccc,#4f8cff);
+      border:none;border-radius:6px;
+      color:#fff;font-size:12px;font-weight:700;cursor:pointer;
+      transition:all .15s;letter-spacing:.4px;
+      box-shadow:0 2px 12px rgba(79,140,255,.3)
+    }
+    #scan-btn:hover{background:linear-gradient(135deg,#3a6edc,#6aa0ff);box-shadow:0 2px 18px rgba(79,140,255,.5)}
+    #scan-btn:disabled{background:rgba(30,30,48,.8);color:#444;cursor:not-allowed;box-shadow:none}
+
+    #progress-wrap{display:none;flex-direction:column;gap:4px}
+    #progress-track{background:rgba(255,255,255,.05);border-radius:4px;height:6px;overflow:hidden}
+    #progress-fill{height:100%;background:linear-gradient(90deg,#4f8cff,#a78bfa,#4f8cff);background-size:200% 100%;
+      width:0%;transition:width .25s;animation:shimmer 2s linear infinite}
+    @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+    #progress-text{font-size:10px;color:#555;text-align:right}
+    #scan-pulse{
+      display:none;height:2px;
+      background:linear-gradient(90deg,transparent,#4f8cff,#a78bfa,transparent);
+      background-size:200% 100%;animation:pulse 1.2s linear infinite;border-radius:2px
+    }
+    @keyframes pulse{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+    #status{font-size:10px;color:#666;min-height:13px;line-height:1.5}
+
+    #disk-bar-track{background:rgba(255,255,255,.04);border-radius:3px;height:7px;overflow:hidden}
+    #disk-bar-used{height:100%;background:linear-gradient(90deg,#4f8cff,#a78bfa);transition:width .6s;width:0%}
+    #disk-bar-label{font-size:10px;color:#444;margin-top:3px}
+
+    .divider{height:1px;background:rgba(255,255,255,.05);flex-shrink:0}
+
+    /* Mode buttons — 3 per row */
+    #modes{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px}
+    .mode-btn{
+      padding:5px 2px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);
+      border-radius:5px;color:#777;font-size:10px;font-weight:600;cursor:pointer;
+      text-align:center;transition:all .15s
+    }
+    .mode-btn:hover{background:rgba(79,140,255,.12);color:#aaa;border-color:rgba(79,140,255,.3)}
+    .mode-btn.active{background:rgba(79,140,255,.2);border-color:rgba(79,140,255,.5);color:#fff;
+      box-shadow:0 0 10px rgba(79,140,255,.25)}
+
+    /* Theme buttons */
+    #themes{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+    .theme-btn{
+      padding:5px 4px;border-radius:5px;border:1px solid rgba(255,255,255,.07);
+      font-size:10px;font-weight:600;cursor:pointer;text-align:center;transition:all .15s;color:#777
+    }
+    .theme-btn[data-theme=cosmos]{background:rgba(10,10,40,.7)}
+    .theme-btn[data-theme=neon]{background:rgba(20,0,30,.7)}
+    .theme-btn[data-theme=ember]{background:rgba(30,8,0,.7)}
+    .theme-btn[data-theme=nature]{background:rgba(4,20,6,.7)}
+    .theme-btn:hover{color:#ccc}
+    .theme-btn.active{color:#fff}
+    .theme-btn[data-theme=cosmos].active{border-color:rgba(79,140,255,.6);box-shadow:0 0 10px rgba(79,140,255,.3)}
+    .theme-btn[data-theme=neon].active{border-color:rgba(255,0,255,.6);box-shadow:0 0 10px rgba(255,0,255,.3)}
+    .theme-btn[data-theme=ember].active{border-color:rgba(255,100,0,.6);box-shadow:0 0 10px rgba(255,100,0,.3)}
+    .theme-btn[data-theme=nature].active{border-color:rgba(0,255,100,.6);box-shadow:0 0 10px rgba(0,255,100,.3)}
+
+    #breadcrumb{display:flex;flex-wrap:wrap;gap:2px;font-size:10px;min-height:13px}
+    #breadcrumb a{color:#4f8cff;text-decoration:none;padding:1px 4px;border-radius:3px}
+    #breadcrumb a:hover{background:rgba(79,140,255,.15)}
+    #breadcrumb .sep{color:#333}
+    #open-explorer-btn{
+      display:none;margin-top:5px;width:100%;padding:5px 8px;
+      background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);
+      border-radius:5px;color:#666;font-size:10px;cursor:pointer;text-align:left;
+      transition:all .15s;letter-spacing:.2px
+    }
+    #open-explorer-btn:hover{background:rgba(79,140,255,.1);border-color:rgba(79,140,255,.3);color:#aaa}
+
+    #info-panel{font-size:11px;line-height:1.8;color:#888}
+    #info-panel strong{color:#fff;display:block;margin-bottom:2px;word-break:break-all;font-size:11px}
+
+    #legend{display:flex;flex-direction:column;gap:3px}
+    .li{display:flex;align-items:center;gap:6px;font-size:10px;color:#777}
+    .ls{width:8px;height:8px;border-radius:2px;flex-shrink:0}
+    .lsize{margin-left:auto;color:#444;font-size:9px;font-variant-numeric:tabular-nums}
+
+    #label-row{display:flex;align-items:center;gap:6px}
+    #label-pct{font-size:10px;color:#666;min-width:28px;text-align:right}
+
+    #hint{font-size:9px;color:#2a2a3a;line-height:1.9}
+
+    /* Copy-path icon button */
+    #copy-path-btn{
+      background:none;border:none;cursor:pointer;padding:1px 3px;margin-left:4px;
+      color:#333;border-radius:3px;line-height:1;transition:color .15s,background .15s;
+      vertical-align:middle;flex-shrink:0
+    }
+    #copy-path-btn:hover{color:#4f8cff;background:rgba(79,140,255,.12)}
+    #copy-path-btn.copied{color:#2ecc71}
+    .label-row{display:flex;align-items:center}
+    .label-row .label{flex:1}
+
+    /* Viewport scan/SMART loading overlay */
+    #viewport-overlay{
+      display:none;position:absolute;inset:0;z-index:90;
+      background:rgba(2,2,16,.72);backdrop-filter:blur(4px);
+      align-items:center;justify-content:center;flex-direction:column;gap:14px
+    }
+    #viewport-overlay.active{display:flex}
+    .vp-spinner{
+      width:44px;height:44px;border-radius:50%;
+      border:3px solid rgba(79,140,255,.15);
+      border-top-color:#4f8cff;
+      animation:spin .9s linear infinite
+    }
+    @keyframes spin{to{transform:rotate(360deg)}}
+    #vp-overlay-text{font-size:13px;color:#aaa;letter-spacing:.4px}
+
+    /* Per-drive list in sidebar */
+    #drives-list{display:flex;flex-direction:column;gap:6px}
+    .drive-row{font-size:10px}
+    .drive-row-header{display:flex;justify-content:space-between;color:#666;margin-bottom:2px}
+    .drive-row-letter{color:#ccc;font-weight:600}
+    .drive-bar-track{background:rgba(255,255,255,.04);border-radius:2px;height:4px;overflow:hidden}
+    .drive-bar-used{height:100%;border-radius:2px;transition:width .5s}
+    .drive-bar-label{font-size:9px;color:#333;margin-top:2px;text-align:right}
+
+    /* Right-click context menus */
+    #ctx-menu,#ctx-drive-menu{
+      position:fixed;display:none;z-index:500;
+      background:rgba(6,6,18,.97);border:1px solid rgba(255,255,255,.1);
+      border-radius:7px;min-width:160px;padding:4px 0;
+      box-shadow:0 8px 32px rgba(0,0,0,.7);backdrop-filter:blur(10px)
+    }
+    .ctx-item{
+      display:block;width:100%;padding:7px 14px;background:none;border:none;
+      color:#ccc;font-size:11px;text-align:left;cursor:pointer;transition:background .1s,color .1s
+    }
+    .ctx-item:hover{background:rgba(79,140,255,.18);color:#fff}
+    .ctx-item.danger:hover{background:rgba(231,76,60,.2);color:#ff6b6b}
+    .ctx-sep{height:1px;background:rgba(255,255,255,.07);margin:3px 0}
+
+    /* Tooltip with optional preview */
+    #tooltip{
+      position:fixed;background:rgba(4,4,14,.95);
+      border:1px solid rgba(255,255,255,.08);border-radius:7px;
+      padding:8px 12px;font-size:11px;color:#ccc;
+      pointer-events:none;display:none;z-index:200;max-width:340px;line-height:1.6;
+      backdrop-filter:blur(8px);box-shadow:0 4px 20px rgba(0,0,0,.6)
+    }
+    #tooltip strong{color:#fff;display:block;word-break:break-all}
+    #tooltip .tt-cat{font-size:10px;color:#4f8cff;margin-top:2px}
+    #tt-preview{display:none;margin-top:8px;border-radius:5px;overflow:hidden;
+      width:300px;height:180px;background:#000;position:relative}
+    #tt-preview img,#tt-preview video{
+      width:100%;height:100%;object-fit:contain;display:block
+    }
+
+    /* Bottom disk usage HUD */
+    #hud{
+      position:absolute;bottom:0;left:0;right:0;z-index:100;
+      display:flex;align-items:center;justify-content:center;
+      padding:8px 20px;pointer-events:none;
+      background:linear-gradient(0deg,rgba(2,2,16,.92) 0%,transparent 100%)
+    }
+    #hud-inner{
+      display:flex;align-items:center;gap:14px;
+      background:rgba(4,4,20,.85);border:1px solid rgba(255,255,255,.08);
+      border-radius:30px;padding:6px 20px;
+      backdrop-filter:blur(12px);box-shadow:0 2px 24px rgba(0,0,0,.7),
+        inset 0 1px 0 rgba(255,255,255,.06);pointer-events:auto
+    }
+    #hud-text{font-size:12px;font-weight:600;color:#ccc;letter-spacing:.3px;white-space:nowrap}
+    #hud-text span.hud-used{color:#fff;font-weight:700}
+    #hud-text span.hud-total{color:#888}
+    #hud-text span.hud-pct{color:#4f8cff;font-weight:700}
+    #hud-bar-wrap{width:120px;height:5px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden}
+    #hud-bar-fill{height:100%;width:0%;background:linear-gradient(90deg,#4f8cff,#a78bfa);
+      border-radius:3px;transition:width .8s}
+
+    /* SMART diagnostics modal */
+    #smart-overlay{
+      display:none;position:fixed;inset:0;z-index:800;
+      background:rgba(0,0,8,.82);backdrop-filter:blur(6px);
+      align-items:center;justify-content:center
+    }
+    #smart-overlay.open{display:flex}
+    #smart-modal{
+      background:linear-gradient(145deg,rgba(8,8,24,.98),rgba(4,4,16,.98));
+      border:1px solid rgba(255,255,255,.1);border-radius:12px;
+      width:560px;max-width:90vw;max-height:80vh;overflow-y:auto;
+      padding:20px;box-shadow:0 16px 60px rgba(0,0,0,.9)
+    }
+    #smart-modal h2{font-size:14px;font-weight:700;color:#fff;margin-bottom:14px;
+      letter-spacing:.6px;border-bottom:1px solid rgba(255,255,255,.08);padding-bottom:10px}
+    .smart-disk{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);
+      border-radius:8px;padding:12px;margin-bottom:10px}
+    .smart-disk-name{font-size:12px;font-weight:700;color:#fff;margin-bottom:8px}
+    .smart-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px 14px}
+    .smart-row{display:flex;justify-content:space-between;font-size:10px;padding:3px 0;
+      border-bottom:1px solid rgba(255,255,255,.04)}
+    .smart-row:last-child{border:none}
+    .smart-key{color:#666}
+    .smart-val{color:#ccc;font-weight:600;text-align:right}
+    .smart-val.good{color:#2ecc71}
+    .smart-val.warn{color:#f39c12}
+    .smart-val.bad{color:#e74c3c}
+    #smart-close{margin-top:14px;width:100%;padding:8px;background:rgba(79,140,255,.15);
+      border:1px solid rgba(79,140,255,.3);border-radius:6px;color:#4f8cff;
+      font-size:12px;cursor:pointer;transition:background .15s}
+    #smart-close:hover{background:rgba(79,140,255,.25)}
+    #smart-loading{color:#666;font-size:11px;text-align:center;padding:20px}
+
+    /* Ocean + Aurora theme buttons */
+    .theme-btn[data-theme=ocean]{background:rgba(0,15,25,.7)}
+    .theme-btn[data-theme=aurora]{background:rgba(0,12,10,.7)}
+    .theme-btn[data-theme=ocean].active{border-color:rgba(0,200,255,.6);box-shadow:0 0 10px rgba(0,200,255,.3)}
+    .theme-btn[data-theme=aurora].active{border-color:rgba(0,255,160,.6);box-shadow:0 0 10px rgba(0,255,160,.3)}
+
+    /* Tooltip children list */
+    #tt-children{margin-top:6px;border-top:1px solid rgba(255,255,255,.07);padding-top:5px;display:none}
+    .tt-child-row{display:flex;justify-content:space-between;font-size:10px;color:#888;padding:1px 0}
+    .tt-child-row span:first-child{color:#aaa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px}
+    .tt-child-sz{color:#555;margin-left:8px;white-space:nowrap}
+
+    /* Settings / About / Help overlay modals */
+    .dl-overlay{
+      display:none;position:fixed;inset:0;z-index:900;
+      background:rgba(0,0,8,.82);backdrop-filter:blur(6px);
+      align-items:center;justify-content:center
+    }
+    .dl-overlay.open{display:flex}
+    .dl-modal{
+      background:linear-gradient(145deg,rgba(8,8,24,.98),rgba(4,4,16,.98));
+      border:1px solid rgba(255,255,255,.1);border-radius:12px;
+      width:480px;max-width:90vw;max-height:80vh;overflow-y:auto;
+      padding:20px;box-shadow:0 16px 60px rgba(0,0,0,.9)
+    }
+    .dl-modal h2{font-size:14px;font-weight:700;color:#fff;margin-bottom:14px;
+      letter-spacing:.6px;border-bottom:1px solid rgba(255,255,255,.08);padding-bottom:10px}
+    .dl-modal .section-label{font-size:9px;color:#444;text-transform:uppercase;
+      letter-spacing:1.2px;margin:10px 0 5px}
+    .dl-modal .row{display:flex;align-items:center;justify-content:space-between;
+      padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:11px;color:#aaa}
+    .dl-modal .row:last-of-type{border:none}
+    .dl-modal .row label{color:#888;flex:1}
+    .dl-modal .row select,.dl-modal .row input[type=range]{width:140px}
+    .dl-modal .row input[type=checkbox]{width:16px;height:16px;cursor:pointer;accent-color:#4f8cff}
+    .dl-modal-close{margin-top:14px;width:100%;padding:8px;background:rgba(79,140,255,.15);
+      border:1px solid rgba(79,140,255,.3);border-radius:6px;color:#4f8cff;
+      font-size:12px;cursor:pointer;transition:background .15s}
+    .dl-modal-close:hover{background:rgba(79,140,255,.25)}
+    .dl-modal p{font-size:11px;color:#888;line-height:1.9;margin-bottom:6px}
+    .dl-modal .kbd-row{display:flex;gap:12px;align-items:center;padding:4px 0;
+      border-bottom:1px solid rgba(255,255,255,.04);font-size:11px}
+    .dl-modal .kbd-row:last-child{border:none}
+    .dl-modal kbd{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);
+      border-radius:4px;padding:2px 7px;font-size:10px;color:#ccc;font-family:monospace}
+    .dl-modal .kbd-desc{color:#888;flex:1}
+    #settings-btn{
+      margin-top:auto;width:100%;padding:6px;
+      background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);
+      border-radius:5px;color:#444;font-size:10px;cursor:pointer;transition:all .15s
+    }
+    #settings-btn:hover{background:rgba(79,140,255,.08);color:#777;border-color:rgba(79,140,255,.2)}
+
+    /* Top viewport breadcrumb HUD */
+    #top-hud{
+      position:absolute;top:0;left:0;right:0;z-index:100;
+      display:flex;align-items:flex-start;justify-content:center;
+      padding:8px 20px;pointer-events:none;
+      background:linear-gradient(180deg,rgba(2,2,16,.9) 0%,transparent 100%)
+    }
+    #top-hud-inner{
+      display:flex;align-items:center;gap:8px;
+      background:rgba(4,4,20,.85);border:1px solid rgba(255,255,255,.08);
+      border-radius:30px;padding:5px 18px;
+      backdrop-filter:blur(12px);
+      box-shadow:0 2px 24px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.06);
+      pointer-events:auto;max-width:82%
+    }
+    #top-breadcrumb{
+      display:flex;align-items:center;flex-wrap:nowrap;gap:2px;
+      font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden
+    }
+    #top-breadcrumb a{color:#4f8cff;text-decoration:none;padding:1px 4px;border-radius:3px}
+    #top-breadcrumb a:hover{background:rgba(79,140,255,.15)}
+    #top-breadcrumb .sep{color:#333;margin:0 1px}
+    .top-hud-btn{
+      background:none;border:none;cursor:pointer;padding:3px 5px;
+      color:#444;border-radius:3px;font-size:12px;line-height:1;
+      transition:color .15s;display:none;align-items:center
+    }
+    .top-hud-btn:hover{color:#4f8cff}
+
+    /* Hide sidebar location section — moved to top HUD */
+    #sidebar-location{display:none}
+
+    /* ── Transition flash overlay ── */
+    #trans-flash{
+      position:absolute;inset:0;z-index:95;pointer-events:none;
+      opacity:0;transition:opacity 0.25s ease-out;
+      background:radial-gradient(ellipse at center,rgba(79,140,255,0.55) 0%,transparent 70%)
+    }
+    #trans-flash.pop{opacity:1;transition:none}
+
+    /* ── Viewport background (per-theme) ── */
+    #viewport-bg{display:none;position:absolute;inset:0;z-index:50;overflow:hidden;pointer-events:none;mix-blend-mode:screen}
+    #viewport-bg.show{display:block}
+
+
+    /* Ember glow sky — scorched orange-brown, like lava horizon */
+    #viewport-bg.ember-sky{
+      background:linear-gradient(180deg,#120200 0%,#2e0800 35%,#3d0c00 55%,#1a0400 75%,#050100 100%)
+    }
+    /* Nature sky — deep forest canopy green */
+    #viewport-bg.nature-sky{
+      background:linear-gradient(180deg,#011004 0%,#012808 40%,#003010 55%,#011405 75%,#010802 100%)
+    }
+    /* Ocean sky — rich deep-sea blue, clearly different from aurora greens */
+    #viewport-bg.ocean-sky{
+      background:linear-gradient(180deg,#001c3a 0%,#003366 30%,#004880 50%,#002448 70%,#000f20 100%)
+    }
+    /* Aurora sky — dark arctic night sky with visible green tones */
+    #viewport-bg.aurora-sky{
+      background:linear-gradient(180deg,#000510 0%,#00150a 25%,#003020 50%,#001810 72%,#000206 100%)
+    }
+    /* Aurora animated bands — brighter, more vivid than before */
+    #vp-aurora-bands{position:absolute;inset:0;opacity:0.6;
+      animation:aurora-shift 10s ease-in-out infinite alternate}
+    @keyframes aurora-shift{
+      0%  {background:linear-gradient(162deg,transparent 18%,rgba(0,255,140,0.38) 32%,rgba(0,200,120,0.28) 48%,rgba(80,0,220,0.22) 60%,transparent 72%)}
+      33% {background:linear-gradient(168deg,transparent 14%,rgba(0,230,255,0.30) 28%,rgba(0,255,160,0.40) 46%,rgba(160,0,255,0.18) 62%,transparent 76%)}
+      66% {background:linear-gradient(155deg,transparent 22%,rgba(60,255,180,0.32) 38%,rgba(0,180,255,0.28) 54%,rgba(0,255,100,0.20) 68%,transparent 80%)}
+      100%{background:linear-gradient(172deg,transparent 16%,rgba(0,255,120,0.42) 30%,rgba(100,255,200,0.25) 50%,rgba(200,0,255,0.20) 64%,transparent 76%)}
+    }
+
+    /* ── Right panel SMART section ── */
+    #rp-smart-section{margin-top:4px}
+    #rp-smart-toggle{
+      display:flex;align-items:center;justify-content:space-between;
+      cursor:pointer;padding:2px 0;user-select:none
+    }
+    #rp-smart-toggle:hover .label{color:#888}
+    #rp-smart-caret{font-size:8px;color:#333;transition:transform .2s}
+    #rp-smart-caret.open{transform:rotate(180deg)}
+    #rp-smart-body{display:flex;flex-direction:column;gap:4px;margin-top:5px}
+    .rp-smart-disk{
+      background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.06);
+      border-radius:6px;padding:7px 8px;font-size:9px
+    }
+    .rp-smart-disk-name{font-size:10px;font-weight:700;color:#ccc;margin-bottom:5px;
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:5px}
+    .rp-smart-drives{font-size:9px;font-weight:600;color:#4f8cff;background:rgba(79,140,255,.12);
+      border:1px solid rgba(79,140,255,.25);border-radius:3px;padding:1px 4px;flex-shrink:0;white-space:nowrap}
+    .rp-smart-row{display:flex;justify-content:space-between;padding:1.5px 0;
+      border-bottom:1px solid rgba(255,255,255,.03)}
+    .rp-smart-row:last-child{border:none}
+    .rp-smart-k{color:#444}
+    .rp-smart-v{color:#888;font-weight:600;text-align:right}
+    .rp-smart-v.good{color:#2ecc71}
+    .rp-smart-v.warn{color:#f39c12}
+    .rp-smart-v.bad{color:#e74c3c}
+    #rp-smart-loading{font-size:9px;color:#333;padding:4px 0}
+
+    /* ── Right panel file dates ── */
+    #rp-dates{display:none;margin-top:4px}
+    #rp-dates .label{margin-bottom:3px}
+    .rp-date-row{display:flex;justify-content:space-between;font-size:9px;padding:2px 0;
+      border-bottom:1px solid rgba(255,255,255,.03)}
+    .rp-date-row:last-child{border:none}
+    .rp-date-k{color:#444}
+    .rp-date-v{color:#777;text-align:right;font-variant-numeric:tabular-nums}
+
+    /* ── Settings custom theme ── */
+    .dl-modal input[type=color]{
+      width:36px;height:24px;padding:0;border:1px solid rgba(255,255,255,.15);
+      border-radius:4px;cursor:pointer;background:none;
+      vertical-align:middle
+    }
+    .color-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 0;
+      border-bottom:1px solid rgba(255,255,255,.04);font-size:11px;color:#aaa}
+    .color-row label{color:#888;flex:1;min-width:80px}
+    .color-swatch-group{display:flex;gap:6px;align-items:center}
+    .color-label-sm{font-size:9px;color:#555}
+
+    /* Custom theme button */
+    .theme-btn[data-theme=custom]{background:rgba(20,10,30,.7)}
+    .theme-btn[data-theme=custom].active{border-color:rgba(180,100,255,.6);box-shadow:0 0 10px rgba(180,100,255,.3)}
+
+    /* Collapsible sidebar sections */
+    .label.collapsible{cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none}
+    .label.collapsible:hover{color:#888}
+    .sb-caret{font-size:8px;color:#333;transition:transform .2s;flex-shrink:0}
+    .sb-caret.open{transform:rotate(180deg)}
+    .sb-section-body{overflow:hidden;transition:max-height 0.25s ease-out,opacity 0.25s;opacity:1}
+    .sb-section-body.collapsed{max-height:0!important;opacity:0;overflow:hidden}
+
+    /* Theme bg option button row */
+    #bg-options{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
+    .bg-opt-btn{
+      padding:3px 8px;border-radius:4px;border:1px solid rgba(255,255,255,.1);
+      font-size:9px;color:#666;cursor:pointer;background:rgba(255,255,255,.03);
+      transition:all .15s
+    }
+    .bg-opt-btn:hover{color:#aaa;border-color:rgba(255,255,255,.2)}
+    .bg-opt-btn.active{color:#fff;border-color:rgba(79,140,255,.5);background:rgba(79,140,255,.1)}
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "../node_modules/three/src/Three.js",
+      "three/addons/": "../node_modules/three/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+<div id="layout">
+  <div id="sidebar">
+    <h1>&#128269; DriveLens</h1>
+
+    <div>
+      <div class="label">Drive</div>
+      <select id="drive-select"><option value="">Loading drives…</option></select>
+    </div>
+
+    <button id="scan-btn">Scan</button>
+
+    <div id="progress-wrap">
+      <div id="progress-track"><div id="progress-fill"></div></div>
+      <div id="progress-text">0%</div>
+    </div>
+    <div id="scan-pulse"></div>
+    <div id="status">Select a drive and click Scan</div>
+
+    <div>
+      <div class="label">Disk Usage</div>
+      <div id="disk-bar-track"><div id="disk-bar-used"></div></div>
+      <div id="disk-bar-label">—</div>
+    </div>
+
+    <div>
+      <div class="label">All Drives</div>
+      <div id="drives-list"><div style="font-size:9px;color:#2a2a3a">Loading…</div></div>
+    </div>
+
+    <div>
+      <div class="label">File Types</div>
+      <div id="legend">
+        <div class="li"><div class="ls" style="background:#4a90d9"></div>Folders<span id="leg-folders" class="lsize"></span></div>
+        <div class="li"><div class="ls" style="background:#e74c3c"></div>Video<span id="leg-video" class="lsize"></span></div>
+        <div class="li"><div class="ls" style="background:#2ecc71"></div>Images<span id="leg-images" class="lsize"></span></div>
+        <div class="li"><div class="ls" style="background:#f39c12"></div>Audio<span id="leg-audio" class="lsize"></span></div>
+        <div class="li"><div class="ls" style="background:#9b59b6"></div>Archives<span id="leg-archives" class="lsize"></span></div>
+        <div class="li"><div class="ls" style="background:#3498db"></div>Documents<span id="leg-documents" class="lsize"></span></div>
+        <div class="li"><div class="ls" style="background:#1abc9c"></div>Code<span id="leg-code" class="lsize"></span></div>
+        <div class="li"><div class="ls" style="background:#f1c40f"></div>Executables<span id="leg-executables" class="lsize"></span></div>
+        <div class="li"><div class="ls" style="background:#e67e22"></div>3D Models<span id="leg-model3d" class="lsize"></span></div>
+        <div class="li"><div class="ls" style="background:#d35400"></div>Fonts<span id="leg-fonts" class="lsize"></span></div>
+        <div class="li"><div class="ls" style="background:#16a085"></div>Databases<span id="leg-database" class="lsize"></span></div>
+        <div class="li"><div class="ls" style="background:#7f8c8d"></div>Other<span id="leg-other" class="lsize"></span></div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div>
+      <div class="label">Visualization</div>
+      <div id="modes">
+        <button class="mode-btn active" data-mode="treemap">Treemap</button>
+        <button class="mode-btn" data-mode="sunburst">Sunburst</button>
+        <button class="mode-btn" data-mode="bar">Bar</button>
+        <button class="mode-btn" data-mode="stacked">Stacked</button>
+        <button class="mode-btn" data-mode="city">City</button>
+        <button class="mode-btn" data-mode="galaxy">Galaxy</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="label">Theme</div>
+      <div id="themes" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px">
+        <button class="theme-btn active" data-theme="cosmos">Cosmos</button>
+        <button class="theme-btn" data-theme="neon">Neon City</button>
+        <button class="theme-btn" data-theme="ember">Ember</button>
+        <button class="theme-btn" data-theme="nature">Nature</button>
+        <button class="theme-btn" data-theme="ocean">Ocean</button>
+        <button class="theme-btn" data-theme="aurora">Aurora</button>
+        <button class="theme-btn" data-theme="custom" style="grid-column:span 3">&#9881; Custom…</button>
+      </div>
+      <div id="bg-options" title="Viewport background style">
+        <button class="bg-opt-btn active" data-bg="solid">Solid</button>
+        <button class="bg-opt-btn" data-bg="sky">Sky</button>
+        <button class="bg-opt-btn" data-bg="gradient">Gradient</button>
+        <button class="bg-opt-btn" data-bg="matrix">Matrix</button>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+
+    <div>
+      <div class="label">Label threshold</div>
+      <div id="label-row">
+        <input type="range" id="label-threshold" min="0" max="20" step="0.5" value="2">
+        <span id="label-pct">2%</span>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div id="sidebar-location">
+      <div class="label-row">
+        <div class="label">Location</div>
+        <button id="copy-path-btn" title="Copy path to clipboard" style="display:none">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M4 2a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6z"/>
+            <path d="M2 5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1v-1H9v1H2V6h1V5H2z"/>
+          </svg>
+        </button>
+      </div>
+      <div id="breadcrumb">—</div>
+      <button id="open-explorer-btn">&#128193; Open in Explorer</button>
+    </div>
+
+    <div>
+      <div class="label">Selected</div>
+      <div id="info-panel">Click a block to see details</div>
+    </div>
+
+    <div class="divider"></div>
+    <div id="hint">
+      Drag to orbit &nbsp;·&nbsp; Scroll to zoom<br>
+      Click folder → drill in &nbsp;·&nbsp; Esc → go up<br>
+      Right-click → file actions &nbsp;·&nbsp; <span id="hint-extra" style="color:#2a2a40">City: WASD to walk</span>
+    </div>
+    <button id="settings-btn">&#9881; Settings</button>
+  </div>
+
+  <div id="center-wrap">
+    <div id="canvas-container">
+      <!-- Per-theme viewport background (sits behind Three.js canvas) -->
+      <div id="viewport-bg">
+        <div id="vp-aurora-bands"></div>
+      </div>
+      <!-- Transition flash -->
+      <div id="trans-flash"></div>
+
+    <!-- Top breadcrumb HUD (inside center-wrap, always visible) -->
+    <div id="top-hud">
+      <div id="top-hud-inner">
+        <div id="top-breadcrumb"><span style="color:#333">—</span></div>
+        <button class="top-hud-btn" id="top-copy-btn" title="Copy path to clipboard">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M4 2a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6z"/>
+            <path d="M2 5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1v-1H9v1H2V6h1V5H2z"/>
+          </svg>
+        </button>
+        <button class="top-hud-btn" id="top-explorer-btn" title="Open in Explorer">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    </div><!-- /canvas-container -->
+
+    <!-- Scan / SMART loading overlay over the canvas -->
+    <div id="viewport-overlay">
+      <div class="vp-spinner"></div>
+      <div id="vp-overlay-text">Scanning…</div>
+    </div>
+
+    <!-- Bottom disk usage HUD (inside center-wrap so it clips to canvas) -->
+    <div id="hud">
+      <div id="hud-inner">
+        <div id="hud-bar-wrap"><div id="hud-bar-fill"></div></div>
+        <div id="hud-text"><span class="hud-used">—</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right properties panel -->
+  <div id="right-panel">
+    <div class="label">Properties</div>
+    <div id="rp-placeholder" style="color:#2a2a3a;font-size:10px;line-height:1.9">
+      Hover or click any<br>item to see details
+    </div>
+    <div id="rp-content" style="display:none">
+      <div id="rp-name"></div>
+      <div id="rp-size"></div>
+      <div id="rp-bar-track"><div id="rp-bar-fill"></div></div>
+      <div id="rp-sub"></div>
+      <!-- File dates section (files only) -->
+      <div id="rp-dates">
+        <div class="divider" style="margin:6px 0"></div>
+        <div class="label">Details</div>
+        <div class="rp-date-row"><span class="rp-date-k">Created</span><span class="rp-date-v" id="rp-date-created">—</span></div>
+        <div class="rp-date-row"><span class="rp-date-k">Modified</span><span class="rp-date-v" id="rp-date-modified">—</span></div>
+        <div class="rp-date-row"><span class="rp-date-k">Accessed</span><span class="rp-date-v" id="rp-date-accessed">—</span></div>
+      </div>
+      <div class="divider" style="margin:6px 0"></div>
+      <div class="label">By Type</div>
+      <div id="rp-type-grid"></div>
+    </div>
+    <!-- SMART disk health section -->
+    <div id="rp-smart-section">
+      <div class="divider" style="margin:6px 0"></div>
+      <div id="rp-smart-toggle">
+        <div class="label" style="margin:0">Disk Health</div>
+        <span id="rp-smart-caret">&#9650;</span>
+      </div>
+      <div id="rp-smart-loading" class="rp-smart-loading">Loading…</div>
+      <div id="rp-smart-body"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Standard file context menu — hooks into native Windows shell verbs -->
+<div id="ctx-menu">
+  <button class="ctx-item" id="ctx-open">Open</button>
+  <div class="ctx-sep"></div>
+  <button class="ctx-item" id="ctx-rename">Rename</button>
+  <button class="ctx-item" id="ctx-copy">Copy</button>
+  <button class="ctx-item" id="ctx-cut">Cut</button>
+  <div class="ctx-sep"></div>
+  <button class="ctx-item danger" id="ctx-delete">Delete</button>
+  <div class="ctx-sep"></div>
+  <button class="ctx-item" id="ctx-properties">Properties</button>
+</div>
+
+<!-- Drive-level context menu (All Drives view) -->
+<div id="ctx-drive-menu">
+  <button class="ctx-item" id="ctx-drive-properties">Properties</button>
+  <div class="ctx-sep"></div>
+  <button class="ctx-item" id="ctx-drive-smart">S.M.A.R.T. Diagnostics</button>
+</div>
+
+<!-- S.M.A.R.T. modal -->
+<div id="smart-overlay">
+  <div id="smart-modal">
+    <h2>&#9881; S.M.A.R.T. Diagnostics</h2>
+    <div id="smart-loading">Loading drive data…</div>
+    <div id="smart-body"></div>
+    <button id="smart-close">Close</button>
+  </div>
+</div>
+
+<!-- Tooltip with media preview -->
+<div id="tooltip">
+  <strong id="tt-name"></strong>
+  <span id="tt-info"></span>
+  <div class="tt-cat" id="tt-cat"></div>
+  <div id="tt-children"></div>
+  <div id="tt-preview">
+    <img id="tt-img" src="" alt="" style="display:none">
+    <video id="tt-vid" src="" autoplay muted loop style="display:none"></video>
+  </div>
+</div>
+<!-- Settings modal -->
+<div id="settings-overlay" class="dl-overlay">
+  <div class="dl-modal">
+    <h2>&#9881; Settings</h2>
+    <div class="section-label">Startup</div>
+    <div class="row"><label>Default Mode</label>
+      <select id="set-default-mode">
+        <option value="treemap">Treemap</option>
+        <option value="sunburst">Sunburst</option>
+        <option value="bar">Bar Chart</option>
+        <option value="stacked">Stacked</option>
+        <option value="city">City</option>
+        <option value="galaxy">Galaxy</option>
+      </select>
+    </div>
+    <div class="row"><label>Default Theme</label>
+      <select id="set-default-theme">
+        <option value="cosmos">Cosmos</option>
+        <option value="neon">Neon City</option>
+        <option value="ember">Ember</option>
+        <option value="nature">Nature</option>
+        <option value="ocean">Ocean</option>
+        <option value="aurora">Aurora</option>
+        <option value="custom">Custom</option>
+      </select>
+    </div>
+    <div class="section-label">Visualization</div>
+    <div class="row"><label>Show Free Space Tiles</label>
+      <input type="checkbox" id="set-show-free" checked>
+    </div>
+    <div class="row"><label>Label Threshold</label>
+      <span style="display:flex;align-items:center;gap:6px">
+        <input type="range" id="set-label-thresh" min="0" max="20" step="0.5" value="2">
+        <span id="set-label-pct" style="font-size:10px;color:#666;min-width:28px">2%</span>
+      </span>
+    </div>
+    <div class="row"><label>Label Font Size</label>
+      <span style="display:flex;align-items:center;gap:6px">
+        <input type="range" id="set-font-size" min="24" max="120" step="4" value="56">
+        <span id="set-font-size-val" style="font-size:10px;color:#666;min-width:28px">56px</span>
+      </span>
+    </div>
+    <div class="row"><label>Animation Speed</label>
+      <span style="display:flex;align-items:center;gap:6px">
+        <input type="range" id="set-anim-speed" min="0.1" max="3" step="0.1" value="1">
+        <span id="set-anim-pct" style="font-size:10px;color:#666;min-width:28px">1.0×</span>
+      </span>
+    </div>
+    <div class="row">
+      <label>Recursion Count <span style="font-size:9px;color:#444">(Sunburst &amp; Galaxy)</span></label>
+      <select id="set-recursion-depth" style="width:140px">
+        <option value="1">1 — One level</option>
+        <option value="2">2 — Two levels</option>
+        <option value="3" selected>3 — Three levels (default)</option>
+        <option value="5">5 — Five levels</option>
+        <option value="0">All — Unlimited depth</option>
+      </select>
+    </div>
+    <div class="section-label">Custom Theme</div>
+    <div class="color-row">
+      <label>Background</label>
+      <div class="color-swatch-group">
+        <span class="color-label-sm">BG</span><input type="color" id="cust-bg" value="#020210">
+        <span class="color-label-sm">Fog</span><input type="color" id="cust-fog" value="#020210">
+        <span class="color-label-sm">Grid</span><input type="color" id="cust-grid" value="#0a0a28">
+      </div>
+    </div>
+    <div class="color-row">
+      <label>Lighting</label>
+      <div class="color-swatch-group">
+        <span class="color-label-sm">Sun</span><input type="color" id="cust-sun" value="#ffffff">
+        <span class="color-label-sm">Fill</span><input type="color" id="cust-fill" value="#3355aa">
+        <span class="color-label-sm">Accent</span><input type="color" id="cust-accent" value="#4f8cff">
+      </div>
+    </div>
+    <div class="row"><label>Bloom Strength</label>
+      <span style="display:flex;align-items:center;gap:6px">
+        <input type="range" id="cust-bloom" min="0.1" max="2" step="0.05" value="0.45">
+        <span id="cust-bloom-val" style="font-size:10px;color:#666;min-width:28px">0.45</span>
+      </span>
+    </div>
+    <div style="display:flex;gap:6px;margin-top:8px">
+      <button id="cust-apply" style="flex:1;padding:6px;background:rgba(180,100,255,.15);border:1px solid rgba(180,100,255,.3);border-radius:5px;color:#c084fc;font-size:11px;cursor:pointer">Apply Custom Theme</button>
+      <button id="cust-save" style="flex:1;padding:6px;background:rgba(79,140,255,.1);border:1px solid rgba(79,140,255,.25);border-radius:5px;color:#4f8cff;font-size:11px;cursor:pointer">Save &amp; Activate</button>
+    </div>
+    <div style="margin-top:6px">
+      <button id="cust-reset" style="width:100%;padding:5px;background:rgba(231,76,60,.08);border:1px solid rgba(231,76,60,.2);border-radius:5px;color:#e74c3c;font-size:10px;cursor:pointer">Reset to Default (Cosmos)</button>
+    </div>
+    <div class="section-label">About</div>
+    <div style="font-size:10px;color:#444;line-height:1.9">
+      DriveLens v0.1.0 &nbsp;·&nbsp; Electron + Three.js r153<br>
+      Settings are saved automatically between sessions.
+    </div>
+    <button class="dl-modal-close" id="settings-close">Close</button>
+  </div>
+</div>
+
+<!-- About modal -->
+<div id="about-overlay" class="dl-overlay">
+  <div class="dl-modal">
+    <h2>&#128269; DriveLens</h2>
+    <p><strong style="color:#fff">Version 0.1.0</strong></p>
+    <p>A 3D disk usage visualization tool for Windows.<br>
+    Explore your drives with six powerful visualization modes,<br>
+    real-time scanning, S.M.A.R.T. diagnostics, and file management.</p>
+    <div class="section-label">Built With</div>
+    <p>Electron &nbsp;·&nbsp; Three.js r153 &nbsp;·&nbsp; WebGL &nbsp;·&nbsp; PowerShell</p>
+    <div class="section-label">Visualizations</div>
+    <p>3D Treemap &nbsp;·&nbsp; Sunburst &nbsp;·&nbsp; Bar Chart &nbsp;·&nbsp; Stacked &nbsp;·&nbsp; City &nbsp;·&nbsp; Galaxy</p>
+    <div class="section-label">Themes</div>
+    <p>Cosmos &nbsp;·&nbsp; Neon City &nbsp;·&nbsp; Ember &nbsp;·&nbsp; Nature &nbsp;·&nbsp; Ocean &nbsp;·&nbsp; Aurora</p>
+    <p style="margin-top:10px;color:#333;font-size:10px">Open source — MIT License</p>
+    <button class="dl-modal-close" id="about-close">Close</button>
+  </div>
+</div>
+
+<!-- Help / Keyboard Shortcuts modal -->
+<div id="help-overlay" class="dl-overlay">
+  <div class="dl-modal">
+    <h2>&#9000; Keyboard Shortcuts</h2>
+    <div class="kbd-row"><kbd>Click</kbd><span class="kbd-desc">Drill into folder</span></div>
+    <div class="kbd-row"><kbd>Esc</kbd><span class="kbd-desc">Go up one level</span></div>
+    <div class="kbd-row"><kbd>Home</kbd><span class="kbd-desc">Go to root</span></div>
+    <div class="kbd-row"><kbd>Right-click</kbd><span class="kbd-desc">File context menu (rename, delete, copy, cut, properties)</span></div>
+    <div class="kbd-row"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span class="kbd-desc">Walk in City mode</span></div>
+    <div class="kbd-row"><kbd>↑ ↓ ← →</kbd><span class="kbd-desc">Walk in City mode</span></div>
+    <div class="section-label" style="margin-top:10px">Mouse Controls</div>
+    <div class="kbd-row"><span class="kbd-desc">Left drag</span><span>Orbit / rotate view</span></div>
+    <div class="kbd-row"><span class="kbd-desc">Right drag</span><span>Pan view</span></div>
+    <div class="kbd-row"><span class="kbd-desc">Scroll wheel</span><span>Zoom in / out</span></div>
+    <div class="section-label" style="margin-top:10px">Tips</div>
+    <p>Hover any item to see its size and type in the right panel.<br>
+    Right-click drives in All Drives view to run S.M.A.R.T. diagnostics.<br>
+    Use the copy icon next to the breadcrumb to copy a path.</p>
+    <button class="dl-modal-close" id="help-close">Close</button>
+  </div>
+</div>
+
+<script type="module" src="renderer.js"></script>
+</body>
+</html>
