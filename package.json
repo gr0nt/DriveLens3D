@@ -1,0 +1,17 @@
+{
+  "name": "drivelens",
+  "productName": "DriveLens",
+  "version": "0.1.0",
+  "description": "Windows app: scan drive and show 3D visualisation of disk usage",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "three": "^0.153.0",
+    "check-disk-space": "^2.1.0"
+  },
+  "devDependencies": {
+    "electron": "^26.0.0"
+  }
+}
