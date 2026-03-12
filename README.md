@@ -152,36 +152,6 @@ drivelens/
 
 ---
 
-## Building for Distribution
-
-```bash
-npm install --save-dev electron-builder
-```
-
-Add to `package.json`:
-```json
-{
-  "build": {
-    "appId": "com.drivelens.app",
-    "productName": "DriveLens",
-    "win": {
-      "target": "nsis",
-      "icon": "assets/icon.png"
-    }
-  },
-  "scripts": {
-    "dist": "electron-builder"
-  }
-}
-```
-
-Then run:
-```bash
-npm run dist
-```
-
----
-
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
